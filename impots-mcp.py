@@ -11515,6 +11515,392 @@ def tool_simuler_micro_foncier(args: Dict) -> str:
     return "\n".join(lines)
 
 
+# ─── Diagnostic passage freelance ────────────────────────────────────────────
+
+def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
+    """Diagnostic personnalise : est-il pertinent de passer freelance plutot que de rester en CDI/CDD ?"""
+    salaire_brut_cdi = float(args.get("salaire_brut_annuel_cdi", 0))
+    secteur = args.get("secteur", "it_dev")
+    anciennete_ans = int(args.get("anciennete_ans", 5))
+    epargne_disponible = float(args.get("epargne_disponible", 0))
+    clients_potentiels = bool(args.get("clients_potentiels", False))
+    situation = args.get("situation_famille", "celibataire")
+    nb_enfants = int(args.get("nb_enfants", 0))
+    acceptation_risque = args.get("acceptation_risque", "moyen")
+    tjm_vise = float(args.get("tjm_vise", 0))
+    jours = int(args.get("jours_facturation_an", 180))
+    charges_mensuelles = float(args.get("charges_mensuelles", 0))
+    type_activite = args.get("type_activite", "services_bnc")
+
+    nb_parts = calculer_parts(situation, nb_enfants)
+
+    # ── Donnees sectorielles ──────────────────────────────────────────────────
+    SECTEURS = {
+        "it_dev": {
+            "label": "Developpement / DevOps / Securite informatique",
+            "demande": 5,
+            "tjm_median": 550,
+            "tjm_senior": 750,
+            "risque_metier": "faible",
+            "note": "Marche en tension structurelle. Tres forte demande de profils autonomes.",
+        },
+        "it_conseil_data": {
+            "label": "Conseil IT / Data / Cloud / Architecture",
+            "demande": 5,
+            "tjm_median": 600,
+            "tjm_senior": 850,
+            "risque_metier": "faible",
+            "note": "Cloud, IA, data : demande soutenue. TJM eleves des 5 ans d'experience.",
+        },
+        "conseil_management": {
+            "label": "Conseil en management / strategie / organisation",
+            "demande": 4,
+            "tjm_median": 800,
+            "tjm_senior": 1_200,
+            "risque_metier": "moyen",
+            "note": "Marche porteur pour les profils experimentes (> 8 ans). Reseau indispensable.",
+        },
+        "marketing_communication": {
+            "label": "Marketing / Communication / Design",
+            "demande": 3,
+            "tjm_median": 350,
+            "tjm_senior": 550,
+            "risque_metier": "moyen",
+            "note": "Concurrence elevee. Specialisation (SEO, performance, UX) augmente le TJM.",
+        },
+        "juridique_rh": {
+            "label": "Juridique / RH / Paie / Compliance",
+            "demande": 3,
+            "tjm_median": 450,
+            "tjm_senior": 700,
+            "risque_metier": "moyen",
+            "note": "Demande stable. Niche en compliance RGPD/ESG valorisee.",
+        },
+        "btp_artisanat": {
+            "label": "BTP / Artisanat / Metiers du batiment",
+            "demande": 4,
+            "tjm_median": 300,
+            "tjm_senior": 500,
+            "risque_metier": "moyen",
+            "note": "Penurie de mains-d'oeuvre qualifiees. Sous-traitance directe frequente.",
+        },
+        "sante_paramedical": {
+            "label": "Sante / Paramedical / Bien-etre",
+            "demande": 4,
+            "tjm_median": 400,
+            "tjm_senior": 600,
+            "risque_metier": "faible",
+            "note": "Liberaux de sante : modele independant historique. Revenus stables.",
+        },
+        "formation_coaching": {
+            "label": "Formation / Coaching / Conseil RH",
+            "demande": 3,
+            "tjm_median": 500,
+            "tjm_senior": 800,
+            "risque_metier": "eleve",
+            "note": "Marche sature en generalist. Expertise sectorielle ou technique differenciante requise.",
+        },
+        "commerce_vente": {
+            "label": "Commerce / Vente / Business Development",
+            "demande": 2,
+            "tjm_median": 300,
+            "tjm_senior": 450,
+            "risque_metier": "eleve",
+            "note": "Variable incontournable. Revenus irreguliers. Reseau determinant.",
+        },
+        "autre": {
+            "label": "Autre secteur",
+            "demande": 3,
+            "tjm_median": 350,
+            "tjm_senior": 550,
+            "risque_metier": "moyen",
+            "note": "Evaluer la demande locale et sectorielle avant de se lancer.",
+        },
+    }
+    sect = SECTEURS.get(secteur, SECTEURS["autre"])
+
+    ACTIVITES_PARAMS = {
+        "services_bnc": {"taux_ae_cotis": 0.231, "abatt_ae_ir": 0.34, "seuil_ae": 77_700},
+        "services_bic": {"taux_ae_cotis": 0.214, "abatt_ae_ir": 0.50, "seuil_ae": 77_700},
+        "vente_marchandises": {"taux_ae_cotis": 0.128, "abatt_ae_ir": 0.71, "seuil_ae": 188_700},
+    }
+    act = ACTIVITES_PARAMS.get(type_activite, ACTIVITES_PARAMS["services_bnc"])
+
+    # ── Net CDI de reference ──────────────────────────────────────────────────
+    net_salarie_cdi = salaire_brut_cdi * 0.78
+    abatt_cdi = min(14_426, max(495, net_salarie_cdi * 0.10))
+    rni_cdi = max(0, net_salarie_cdi - abatt_cdi)
+    ir_cdi = calculer_ir(rni_cdi, nb_parts)["impot_net"]
+    net_cdi = round(net_salarie_cdi - ir_cdi)
+    net_cdi_mensuel = round(net_cdi / 12)
+
+    # ── TJM minimum pour egaliser le CDI (SASU comme reference principale) ────
+    def tjm_equiv_sasu(net_ref: float) -> int:
+        SMIC_BRUT = 21_622
+        lo, hi = 0.0, 10_000.0
+        for _ in range(60):
+            mid = (lo + hi) / 2
+            ca = mid * jours
+            cout_sal = SMIC_BRUT * 1.55
+            is_base = max(0, ca - cout_sal)
+            is_tot = min(is_base, 42_500) * 0.15 + max(0, is_base - 42_500) * 0.25
+            div_net = max(0, is_base - is_tot) * 0.70
+            net_smic = SMIC_BRUT * 0.77
+            ir_s = calculer_ir(max(0, net_smic - min(14_426, max(495, net_smic * 0.10))), nb_parts)["impot_net"]
+            net = net_smic - ir_s + div_net
+            if net < net_ref:
+                lo = mid
+            else:
+                hi = mid
+        return round((lo + hi) / 2)
+
+    tjm_min_sasu = tjm_equiv_sasu(net_cdi)
+
+    # ── Net freelance avec le TJM vise ───────────────────────────────────────
+    tjm_calcul = tjm_vise if tjm_vise > 0 else (
+        sect["tjm_senior"] if anciennete_ans >= 8 else sect["tjm_median"]
+    )
+    ca_vise = tjm_calcul * jours
+
+    # Simulation SASU
+    SMIC_BRUT = 21_622
+    cout_sal_sasu = round(SMIC_BRUT * 1.55)
+    net_smic_sasu = round(SMIC_BRUT * 0.77)
+    is_base_sasu = max(0, ca_vise - cout_sal_sasu)
+    is_tot_sasu = round(min(is_base_sasu, 42_500) * 0.15 + max(0, is_base_sasu - 42_500) * 0.25)
+    div_nets_sasu = round(max(0, is_base_sasu - is_tot_sasu) * 0.70)
+    ir_smic_sasu = round(calculer_ir(max(0, net_smic_sasu - min(14_426, max(495, net_smic_sasu * 0.10))), nb_parts)["impot_net"])
+    net_freelance_sasu = net_smic_sasu - ir_smic_sasu + div_nets_sasu
+
+    # Simulation AE (si dans les seuils)
+    ca_ae_ok = ca_vise <= act["seuil_ae"]
+    cotis_ae = round(ca_vise * act["taux_ae_cotis"])
+    rni_ae = max(0, ca_vise * (1 - act["abatt_ae_ir"]))
+    ir_ae = round(calculer_ir(rni_ae, nb_parts)["impot_net"])
+    net_freelance_ae = round(ca_vise - cotis_ae - ir_ae)
+
+    gain_sasu = net_freelance_sasu - net_cdi
+    gain_pct_sasu = round(gain_sasu / net_cdi * 100, 1) if net_cdi > 0 else 0
+
+    # ── Buffer de securite ────────────────────────────────────────────────────
+    charges_ref = charges_mensuelles if charges_mensuelles > 0 else net_cdi_mensuel
+    mois_buffer = round(epargne_disponible / charges_ref, 1) if charges_ref > 0 else 0
+
+    # ── Scoring (0-12) ────────────────────────────────────────────────────────
+    score = 0
+    details_score = []
+
+    # 1. Epargne (0-3)
+    if mois_buffer >= 12:
+        pts = 3; detail = f"Epargne >= 12 mois ({mois_buffer:.1f} mois) — tres solide"
+    elif mois_buffer >= 6:
+        pts = 2; detail = f"Epargne 6-12 mois ({mois_buffer:.1f} mois) — suffisante"
+    elif mois_buffer >= 3:
+        pts = 1; detail = f"Epargne 3-6 mois ({mois_buffer:.1f} mois) — limite, a renforcer"
+    else:
+        pts = 0; detail = f"Epargne < 3 mois ({mois_buffer:.1f} mois) — insuffisante"
+    score += pts
+    details_score.append((f"Epargne de securite", pts, 3, detail))
+
+    # 2. Experience (0-2)
+    if anciennete_ans >= 8:
+        pts = 2; detail = f"{anciennete_ans} ans d'experience — profil senior, TJM eleve justifie"
+    elif anciennete_ans >= 3:
+        pts = 1; detail = f"{anciennete_ans} ans d'experience — suffisant pour se lancer"
+    else:
+        pts = 0; detail = f"{anciennete_ans} an(s) — experience limitee, risque de sous-facturation"
+    score += pts
+    details_score.append(("Experience professionnelle", pts, 2, detail))
+
+    # 3. Reseau / clients potentiels (0-2)
+    if clients_potentiels:
+        pts = 2; detail = "Reseau / mission en vue — demarrage sans periode blanche probable"
+    else:
+        pts = 0; detail = "Pas de prospect identifie — periode de demarrage a anticiper (2-6 mois)"
+    score += pts
+    details_score.append(("Reseau et prospects", pts, 2, detail))
+
+    # 4. Demande sectorielle (0-2)
+    d = sect["demande"]
+    if d >= 5:
+        pts = 2; detail = f"Demande tres forte ({sect['label']})"
+    elif d >= 4:
+        pts = 2; detail = f"Demande forte ({sect['label']})"
+    elif d >= 3:
+        pts = 1; detail = f"Demande moderee ({sect['label']})"
+    else:
+        pts = 0; detail = f"Demande faible ({sect['label']}) — niche ou reinvention necessaire"
+    score += pts
+    details_score.append(("Demande sectorielle", pts, 2, detail))
+
+    # 5. Gain financier potentiel (0-2)
+    if gain_pct_sasu >= 20:
+        pts = 2; detail = f"Gain net potentiel : +{gain_pct_sasu:.1f} % par rapport au CDI"
+    elif gain_pct_sasu >= 5:
+        pts = 1; detail = f"Gain net modere : +{gain_pct_sasu:.1f} % par rapport au CDI"
+    elif gain_pct_sasu >= 0:
+        pts = 1; detail = f"Gain marginal : +{gain_pct_sasu:.1f} % — interet surtout non financier"
+    else:
+        pts = 0; detail = f"Gain negatif au TJM cible ({tjm_calcul:.0f} EUR/j) : {gain_pct_sasu:.1f} % vs CDI"
+    score += pts
+    details_score.append(("Gain financier potentiel", pts, 2, detail))
+
+    # 6. Coherence risque / situation (0-1)
+    charge_familiale = nb_enfants > 0 or situation in ("marie", "pacse")
+    if acceptation_risque == "eleve":
+        pts = 1; detail = "Forte tolerance au risque — compatible avec le saut freelance"
+    elif acceptation_risque == "moyen" and not charge_familiale:
+        pts = 1; detail = "Risque moyen, sans charge familiale lourde — acceptable"
+    elif acceptation_risque == "moyen" and charge_familiale:
+        pts = 0; detail = "Risque moyen avec charge familiale — renforcer l'epargne avant"
+    else:  # faible
+        pts = 0; detail = "Faible tolerance au risque — portage salarial ou transition progressive conseillee"
+    score += pts
+    details_score.append(("Profil risque / situation", pts, 1, detail))
+
+    # ── Verdict ────────────────────────────────────────────────────────────────
+    if score >= 10:
+        verdict = "FAVORABLE — Passer freelance est pertinent maintenant"
+        verdict_court = "Passer maintenant"
+        couleur = "+++"
+    elif score >= 7:
+        verdict = "FAVORABLE SOUS CONDITIONS — Le passage est envisageable avec quelques ajustements"
+        verdict_court = "Envisageable"
+        couleur = "++"
+    elif score >= 4:
+        verdict = "A PREPARER — Des conditions cles ne sont pas reunies. Planifier sur 6-18 mois."
+        verdict_court = "Preparer le passage"
+        couleur = "+"
+    else:
+        verdict = "DECONSEILLE A CE STADE — Consolider d'abord experience, epargne et reseau"
+        verdict_court = "Trop tot"
+        couleur = "---"
+
+    # ── TJM cible recommande ──────────────────────────────────────────────────
+    tjm_cible_conservateur = round(tjm_min_sasu * 1.15)  # +15% pour inter-contrats
+
+    # ── Mise en garde specifique situations a risque ─────────────────────────
+    alertes = []
+    if mois_buffer < 3:
+        alertes.append("Epargne critique : constituer au minimum 3 mois de charges avant de quitter le CDI.")
+    if not clients_potentiels and score >= 7:
+        alertes.append("Aucun prospect identifie : demarrer la prospection 3 a 6 mois avant la demission.")
+    if anciennete_ans < 3:
+        alertes.append("Moins de 3 ans d'experience : risque de difficultes a justifier un TJM de marche.")
+    if charge_familiale and mois_buffer < 6:
+        alertes.append("Charge familiale avec epargne < 6 mois : considerez le portage salarial comme etape intermediaire.")
+    if ca_vise > act["seuil_ae"]:
+        alertes.append(f"CA vise ({ca_vise:,.0f} EUR) depasse le seuil AE ({act['seuil_ae']:,} EUR) : SASU ou EURL requis.")
+    if gain_pct_sasu < 0 and tjm_vise > 0:
+        alertes.append(f"Le TJM vise ({tjm_vise:.0f} EUR/j) ne permet pas d'egaliser le CDI. TJM minimum SASU : {tjm_min_sasu:,} EUR/j.")
+
+    # ── Assemblage ─────────────────────────────────────────────────────────────
+    lines = [
+        "# Diagnostic Passage Freelance",
+        "",
+        f"*Simulation indicative — Bareme {ANNEE_FISCALE}*",
+        "",
+        "## Profil analyse",
+        "",
+        f"- Salaire CDI brut : {salaire_brut_cdi:,.0f} EUR/an — net en poche : {net_cdi:,} EUR/an ({net_cdi_mensuel:,} EUR/mois)",
+        f"- Secteur : {sect['label']}",
+        f"- Experience : {anciennete_ans} an(s)",
+        f"- Epargne disponible : {epargne_disponible:,.0f} EUR ({mois_buffer:.1f} mois de charges)",
+        f"- Reseau / prospects : {'Oui' if clients_potentiels else 'Non'}",
+        f"- Situation familiale : {situation}, {nb_enfants} enfant(s)",
+        f"- Tolerance au risque : {acceptation_risque}",
+        f"- Regime fiscal vise : {type_activite}",
+        "",
+    ]
+
+    lines += [
+        "## Score de maturite freelance",
+        "",
+        f"**Score global : {score} / 12**",
+        "",
+        "| Critere | Points | Max | Detail |",
+        "|---------|--------|-----|--------|",
+    ]
+    for nom, pts, maxi, det in details_score:
+        lines.append(f"| {nom} | {pts} | {maxi} | {det} |")
+    lines.append("")
+
+    lines += [
+        "## Verdict",
+        "",
+        f"**{couleur} {verdict}**",
+        "",
+    ]
+
+    if alertes:
+        lines += [
+            "### Points de vigilance",
+            "",
+        ]
+        for a in alertes:
+            lines.append(f"- {a}")
+        lines.append("")
+
+    lines += [
+        "## Projection financiere",
+        "",
+        f"*TJM analyse : {tjm_calcul:.0f} EUR/j HT — {jours} jours factures/an — CA : {ca_vise:,.0f} EUR*",
+        "",
+        "| Scenario | Net annuel | vs CDI |",
+        "|----------|-----------|--------|",
+        f"| CDI actuel | {net_cdi:,} EUR | reference |",
+    ]
+    if ca_ae_ok:
+        lines.append(f"| Auto-entrepreneur | {net_freelance_ae:,} EUR | {'+' if net_freelance_ae > net_cdi else ''}{net_freelance_ae - net_cdi:,} EUR |")
+    lines += [
+        f"| SASU (SMIC + dividendes) | {net_freelance_sasu:,} EUR | {'+' if net_freelance_sasu > net_cdi else ''}{net_freelance_sasu - net_cdi:,} EUR |",
+        "",
+    ]
+
+    lines += [
+        "## TJM cible",
+        "",
+        f"| Objectif | TJM | CA annuel ({jours} j) |",
+        "|----------|-----|----------------------|",
+        f"| Egaliser le CDI net (SASU) | {tjm_min_sasu:,} EUR/j | {tjm_min_sasu * jours:,} EUR |",
+        f"| TJM recommande (+15% inter-contrats) | {tjm_cible_conservateur:,} EUR/j | {tjm_cible_conservateur * jours:,} EUR |",
+        f"| Median du secteur | {sect['tjm_median']:,} EUR/j | {sect['tjm_median'] * jours:,} EUR |",
+        f"| Senior du secteur (>= 8 ans) | {sect['tjm_senior']:,} EUR/j | {sect['tjm_senior'] * jours:,} EUR |",
+        "",
+    ]
+
+    lines += [
+        "## Analyse du secteur",
+        "",
+        f"- Demande marche : {'*' * sect['demande']} ({sect['demande']}/5)",
+        f"- Risque metier : {sect['risque_metier']}",
+        f"- Note : {sect['note']}",
+        "",
+    ]
+
+    lines += [
+        "## Preparation recommandee avant le saut",
+        "",
+        "1. Epargne : constituer 6 a 12 mois de charges mensuelles avant de quitter le CDI",
+        "2. Reseau : identifier 2 a 3 clients potentiels ou une mission de demarrage",
+        "3. Statut : immatriculer SASU ou AE avant la demission (delai d'immatriculation : 1-5 jours)",
+        "4. Couverture : souscrire une RC Pro et mutuelle independant avant le depart",
+        "5. Transition : negocier une rupture conventionnelle pour conserver les droits au chomage (ARE)",
+        "   (ARE en independant : possible si CA < seuil ou en portage, a verifier Pole Emploi)",
+        "6. Expert-comptable : prevoir 1 500 a 2 500 EUR/an (SASU/EURL) ou 500 EUR (AE)",
+        "",
+        "## Alternatives au saut direct",
+        "",
+        "- **Portage salarial** : tester sans creation de structure, conserver le chomage, charges ~8%",
+        "- **Cumuler CDI + activite annexe** : AE en micro pendant le CDI (accord employeur requis)",
+        "- **Negocier un temps partiel** : 4 jours/5 pour tester le marche en parallele",
+        "",
+        "---",
+        f"*Simulation basee sur les taux {ANNEE_FISCALE}. Consultez un expert-comptable avant toute decision.*",
+    ]
+    return "\n".join(lines)
+
+
 # ─── Point d'entrée ──────────────────────────────────────────────────────────
 
 async def main():

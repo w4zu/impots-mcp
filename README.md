@@ -14,7 +14,7 @@ pendant les calculs.
 
 ## Fonctionnalités
 
-Le serveur expose **61 outils** répartis en plusieurs domaines :
+Le serveur expose **62 outils** répartis en plusieurs domaines :
 
 **Calcul et déclaration**
 - Impôt sur le revenu 2026 (barème indexé, quotient familial, décote, garde alternée)
@@ -32,6 +32,7 @@ Le serveur expose **61 outils** répartis en plusieurs domaines :
 - Comparaison CDI vs auto-entrepreneur, SASU, EURL IS, portage salarial
 - Calcul du net en poche après toutes charges sociales et impôts
 - TJM minimum pour égaler un salaire CDI donné
+- Diagnostic personnalisé passage freelance : score de maturité, analyse secteur/épargne/réseau, verdict et TJM cible
 
 **Revenus exceptionnels et capital**
 - Système du quotient (art. 163-0 A) : indemnité de licenciement, prime exceptionnelle, rappels de salaires
@@ -193,6 +194,9 @@ Il suffit de poser vos questions en langage naturel.
 
 "Je pars m'installer en Allemagne avec 1,2M€ de PV latentes sur mes actions"
 → Exit tax : ~360 000€ | Départ UE → sursis automatique de paiement
+
+"Je suis dev senior à 65k brut, 8 ans d'expérience, 20k d'épargne, pas encore de clients"
+→ Score : 7/12 — Envisageable | TJM min SASU : 298€/j | TJM recommandé : 343€/j | Alerte : constituer 6 mois d'épargne, identifier 1-2 prospects avant de démissionner
 ```
 
 Des exemples détaillés avec les paramètres JSON exacts sont disponibles dans [EXEMPLES.md](EXEMPLES.md).
@@ -204,7 +208,7 @@ Des exemples détaillés avec les paramètres JSON exacts sont disponibles dans 
 Le projet tient dans un seul fichier Python de ~11 400 lignes.
 
 ```
-impots-mcp.py        Script principal — serveur MCP + 54 outils
+impots-mcp.py        Script principal — serveur MCP + 62 outils
 requirements.txt     Dépendance unique : mcp >= 1.0.0
 ```
 
