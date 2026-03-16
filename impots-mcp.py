@@ -2987,6 +2987,97 @@ TOOLS = [
             "required": [],
         },
     ),
+    Tool(
+        name="diagnostiquer_passage_freelance",
+        description=(
+            "Diagnostic personnalise : est-il interessant de passer freelance (independant) "
+            "plutot que de rester en CDI/CDD ? "
+            "Analyse la situation financiere, le secteur, l'experience, l'epargne de securite, "
+            "le reseau clients et la tolerance au risque. "
+            "Produit un score de maturite et une recommandation claire : passer maintenant, "
+            "preparer le passage, ou rester salarie. "
+            "Calcule le gain net potentiel et le TJM cible selon le profil."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "salaire_brut_annuel_cdi": {
+                    "type": "number",
+                    "description": "Salaire brut annuel actuel en CDI/CDD (euros)",
+                },
+                "secteur": {
+                    "type": "string",
+                    "enum": [
+                        "it_dev", "it_conseil_data", "conseil_management",
+                        "marketing_communication", "juridique_rh",
+                        "btp_artisanat", "sante_paramedical",
+                        "formation_coaching", "commerce_vente", "autre",
+                    ],
+                    "description": (
+                        "Secteur d'activite : it_dev (dev/devops/securite), "
+                        "it_conseil_data (conseil IT/data/cloud), "
+                        "conseil_management (strategie/organisation), "
+                        "marketing_communication, juridique_rh, "
+                        "btp_artisanat, sante_paramedical, "
+                        "formation_coaching, commerce_vente, autre"
+                    ),
+                    "default": "it_dev",
+                },
+                "anciennete_ans": {
+                    "type": "integer",
+                    "description": "Annees d'experience professionnelle dans le secteur",
+                    "default": 5,
+                },
+                "epargne_disponible": {
+                    "type": "number",
+                    "description": "Epargne de precaution disponible (euros)",
+                    "default": 0,
+                },
+                "clients_potentiels": {
+                    "type": "boolean",
+                    "description": "Avez-vous deja des prospects, un reseau ou une mission en vue ?",
+                    "default": False,
+                },
+                "situation_famille": {
+                    "type": "string",
+                    "enum": ["celibataire", "marie", "pacse", "divorce", "veuf"],
+                    "default": "celibataire",
+                },
+                "nb_enfants": {
+                    "type": "integer",
+                    "default": 0,
+                },
+                "acceptation_risque": {
+                    "type": "string",
+                    "enum": ["faible", "moyen", "eleve"],
+                    "description": "Tolerance au risque financier et professionnel",
+                    "default": "moyen",
+                },
+                "tjm_vise": {
+                    "type": "number",
+                    "description": "TJM envisage (euros/jour HT). Si omis, calcule le TJM minimum pour egaliser le CDI.",
+                    "default": 0,
+                },
+                "jours_facturation_an": {
+                    "type": "integer",
+                    "description": "Jours facturable par an (defaut 180 pour etre conservateur)",
+                    "default": 180,
+                },
+                "charges_mensuelles": {
+                    "type": "number",
+                    "description": "Charges mensuelles personnelles (loyer, credits, alimentation...) en euros. Aide a calculer le buffer de securite.",
+                    "default": 0,
+                },
+                "type_activite": {
+                    "type": "string",
+                    "enum": ["services_bnc", "services_bic", "vente_marchandises"],
+                    "description": "Type fiscal : services_bnc (liberal/conseil/IT), services_bic (artisan/commerce), vente_marchandises",
+                    "default": "services_bnc",
+                },
+            },
+            "required": ["salaire_brut_annuel_cdi"],
+        },
+    ),
 ]
 
 
@@ -3077,6 +3168,8 @@ _TOOL_DISPATCH = {
     "calculer_exit_tax":              lambda a: tool_calculer_exit_tax(a),
     "guide_loc_avantages":            lambda a: tool_guide_loc_avantages(a),
     "simuler_micro_foncier":          lambda a: tool_simuler_micro_foncier(a),
+    # Nouveaux outils 2.8.0 — Diagnostic passage freelance
+    "diagnostiquer_passage_freelance": lambda a: tool_diagnostiquer_passage_freelance(a),
 }
 
 
