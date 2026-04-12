@@ -5,6 +5,35 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 
 ---
 
+## [2.8.0] — 2026-04-12
+
+### Mis à jour — Données fiscales avril 2026
+
+**Barème IR 2026 corrigé** (Loi n° 2026-103 du 19 février 2026, art. 4 — indexation +0,9%)
+- Tranches IR 2026 : 0% → 11 600€ / 11% → 29 579€ / 30% → 84 577€ / 41% → 181 917€ / 45% au-delà
+  (correction : l'ancien code utilisait +1,8% par erreur)
+- Plafond demi-part quotient familial : 1 791€ → **1 807€**
+
+**Taux livrets réglementés** (Banque de France, en vigueur depuis le 1er février 2026)
+- Livret A : 2,4% → **1,5%**
+- LDDS : 2,4% → **1,5%**
+- LEP : 3,5% → **2,5%**
+
+**Seuils LEP 2026** (source : service-public.fr)
+- Plafond RFR 1 part : 22 419€ → **23 028€**
+- Plafond RFR 2 parts : 34 393€ → **35 326€**
+- Plafond RFR 3 parts : 41 289€ → **47 624€**
+- Plafond RFR 4 parts : 48 189€ → **59 922€** (extrapolé)
+
+**Calendrier fiscal 2026** — dates officielles confirmées (impots.gouv.fr)
+- Ouverture déclaration en ligne : 9 avril 2026
+- Date limite papier : 19 mai 2026
+- Zone 1 (dép. 01-19 + non-résidents) : 21 mai 2026
+- Zone 2 (dép. 20-54) : 28 mai 2026
+- Zone 3 (dép. 55-974 et 976) : 4 juin 2026
+
+---
+
 ## [2.5.0] — 2026-03-10
 
 ### Ajouté — 13 nouveaux outils (52 au total)

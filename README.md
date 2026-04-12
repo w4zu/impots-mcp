@@ -235,7 +235,7 @@ Chaque année fiscale, les éléments suivants doivent être vérifiés et mis �
 
 | Paramètre | Variable | Fréquence |
 |-----------|----------|-----------|
-| Barème IR | `TRANCHES_IR_ACTIF` | Annuelle (indexation ~1.8%) |
+| Barème IR | `TRANCHES_IR_ACTIF` | Annuelle (indexation variable — +0,9% en 2026, LFI) |
 | Plafond PER | `PLAFOND_PER_MAX_*` | Annuelle (10% × 8 PASS) |
 | Seuils AE | dans `tool_guide_auto_entrepreneur` | Biennale |
 | SMIC brut | dans `tool_comparer_statuts_professionnel` | Annuelle |
@@ -252,7 +252,7 @@ pour une année cible donnée.
 
 | Domaine | Année de référence | Source |
 |---------|-------------------|--------|
-| Barème IR | 2026 (revenus 2025) | Loi de finances 2026 |
+| Barème IR | 2026 (revenus 2025, +0,9%) | Loi n° 2026-103 du 19/02/2026, art. 4 |
 | IFI | 2026 | LFI 2026 |
 | IS | 2025 (taux stables LF2023) | CGI art. 219 |
 | Cotisations AE | 2025 | URSSAF |
@@ -260,7 +260,9 @@ pour une année cible donnée.
 | Seuils TVA franchise | 2025 | LF 2025 |
 | Barèmes donation/succession | 2024 (stables) | CGI art. 777 |
 | MaPrimeRénov' | 2025 | Arrêté ADEME |
-| Calendrier fiscal | 2026 | impots.gouv.fr |
+| Livret A / LDDS | 1,5% depuis 01/02/2026 | Banque de France |
+| LEP | 2,5% depuis 01/02/2026 — seuil 23 028€ | Banque de France / service-public.fr |
+| Calendrier fiscal | 2026 (dates officielles) | impots.gouv.fr |
 
 ---
 

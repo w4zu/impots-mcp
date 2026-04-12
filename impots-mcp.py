@@ -4,13 +4,15 @@ MCP Impôts Français - Expert en optimisation fiscale pour particuliers et prof
 Spécialiste de l'impôt sur le revenu, IS, IFI, PER, cryptomonnaies,
 épargne salariale, transmission d'entreprise et SCI.
 
-Version : 2.4.0
-Données : Barème IR 2026 (revenus 2025), IFI 2026, PER 2025, IS 2025,
-          Calendrier 2026, CEHR, Droits de donation/succession, SCPI, Crypto 2086,
+Version : 2.8.0
+Données : Barème IR 2026 +0,9% (revenus 2025, LFI n°2026-103 du 19/02/2026),
+          IFI 2026, PER 2026, IS 2025, Calendrier 2026 (dates officielles),
+          Livret A/LDDS 1,5% / LEP 2,5% (depuis 01/02/2026),
+          CEHR, Droits de donation/succession, SCPI, Crypto 2086,
           Retraite (réforme 2023), Fiscalité agricole, Outre-mer DOM-TOM
 """
 
-__version__ = "2.7.0"
+__version__ = "2.8.0"
 
 import json
 import sys
@@ -43,14 +45,15 @@ TRANCHES_IR_2025 = [
     {"min": 180_294, "max": None,    "taux": 0.45},
 ]
 
-# Barème IR 2026 (revenus 2025, déclaration printemps 2026) — indexé +1.8%
-# Source : Loi de finances 2026 — à vérifier sur impots.gouv.fr
+# Barème IR 2026 (revenus 2025, déclaration printemps 2026) — indexé +0,9%
+# Source : Loi n° 2026-103 du 19 février 2026 de finances pour 2026, art. 4
+# Confirmé BOFiP ACTU-2026-00022 du 07/04/2026
 TRANCHES_IR_2026 = [
-    {"min": 0,       "max": 11_709,  "taux": 0.00},
-    {"min": 11_709,  "max": 29_843,  "taux": 0.11},
-    {"min": 29_843,  "max": 85_297,  "taux": 0.30},
-    {"min": 85_297,  "max": 183_579, "taux": 0.41},
-    {"min": 183_579, "max": None,    "taux": 0.45},
+    {"min": 0,       "max": 11_600,  "taux": 0.00},
+    {"min": 11_600,  "max": 29_579,  "taux": 0.11},
+    {"min": 29_579,  "max": 84_577,  "taux": 0.30},
+    {"min": 84_577,  "max": 181_917, "taux": 0.41},
+    {"min": 181_917, "max": None,    "taux": 0.45},
 ]
 
 # Barème actif (2026 = revenus 2025)
@@ -58,7 +61,7 @@ TRANCHES_IR_ACTIF = TRANCHES_IR_2026
 ANNEE_FISCALE = "2026 (revenus 2025)"
 
 # Plafond de la réduction du quotient familial par demi-part
-PLAFOND_DEMI_PART = 1_791  # 2026, euros par demi-part supplémentaire
+PLAFOND_DEMI_PART = 1_807  # 2026, euros par demi-part supplémentaire (LFI 2026 +0,9%)
 
 # Plafond PER déductible (10% des revenus professionnels nets)
 PLAFOND_PER_POURCENTAGE = 0.10
@@ -184,20 +187,20 @@ EPARGNE_FISCALE = {
     },
     "LEP": {
         "nom": "Livret d'Épargne Populaire (LEP)",
-        "avantage": "Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : 3,5% (2025)",
+        "avantage": "Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : 2,5% (depuis 01/02/2026)",
         "plafond": "10 000€",
-        "conditions": "Sous conditions de revenus (RFR ≤ 22 419€ pour 1 part en 2024)",
+        "conditions": "Sous conditions de revenus (RFR ≤ 23 028€ pour 1 part en 2026)",
         "article": "Art. L221-13 Code monétaire",
     },
     "livret_A": {
         "nom": "Livret A",
-        "avantage": "Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : 2,4% (2025)",
+        "avantage": "Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : 1,5% (depuis 01/02/2026)",
         "plafond": "22 950€",
         "article": "Art. L221-1 Code monétaire",
     },
     "LDDS": {
         "nom": "Livret de Développement Durable et Solidaire (LDDS)",
-        "avantage": "Intérêts exonérés. Taux : 2,4% (2025)",
+        "avantage": "Intérêts exonérés. Taux : 1,5% (depuis 01/02/2026)",
         "plafond": "12 000€",
         "article": "Art. L221-27 Code monétaire",
     },
@@ -373,28 +376,28 @@ MPR_SEUILS_2025 = {
 
 CALENDRIER_FISCAL_2026 = [
     {
-        "date": "Avril 2026",
+        "date": "9 avril 2026",
         "evenement": "Ouverture de la déclaration de revenus 2025 en ligne (impots.gouv.fr)",
         "important": True,
     },
     {
-        "date": "19 mai 2026 (estimation)",
-        "evenement": "Date limite déclaration papier",
+        "date": "19 mai 2026",
+        "evenement": "Date limite déclaration papier (cachet La Poste faisant foi, 23h59)",
         "important": True,
     },
     {
-        "date": "26 mai 2026 (estimation)",
-        "evenement": "Date limite déclaration en ligne — Zone 1 (dép. 01 à 19 + non-résidents)",
+        "date": "21 mai 2026",
+        "evenement": "Date limite déclaration en ligne — Zone 1 (dép. 01 à 19 + non-résidents) — 23h59",
         "important": True,
     },
     {
-        "date": "2 juin 2026 (estimation)",
-        "evenement": "Date limite déclaration en ligne — Zone 2 (dép. 20 à 54)",
+        "date": "28 mai 2026",
+        "evenement": "Date limite déclaration en ligne — Zone 2 (dép. 20 à 54) — 23h59",
         "important": True,
     },
     {
-        "date": "9 juin 2026 (estimation)",
-        "evenement": "Date limite déclaration en ligne — Zone 3 (dép. 55 à 976)",
+        "date": "4 juin 2026",
+        "evenement": "Date limite déclaration en ligne — Zone 3 (dép. 55 à 974 et 976) — 23h59",
         "important": True,
     },
     {
@@ -3433,10 +3436,10 @@ def tool_optimiser_impots(args: Dict) -> str:
     # Épargne défiscalisée
     lines += [
         f"#### {prio}. Maximisez votre épargne défiscalisée",
-        "- **Livret A** : 2,4% sans impôt ni prélèvements sociaux (plafond 22 950€)",
+        "- **Livret A** : 1,5% sans impôt ni prélèvements sociaux (plafond 22 950€)",
     ]
-    if rni / nb_parts < 22_419:
-        lines.append("- **LEP** : vous semblez éligible ! 3,5% défiscalisé (plafond 10 000€) — vérifiez sur impots.gouv.fr")
+    if rni / nb_parts < 23_028:
+        lines.append("- **LEP** : vous semblez éligible ! 2,5% défiscalisé (plafond 10 000€) — vérifiez sur impots.gouv.fr")
     lines += [
         "- **PEA** : plus-values exonérées après 5 ans (plafond 150 000€)",
         "- **Assurance-vie** : exonération après 8 ans (abattement 4 600€/9 200€ par an)",
@@ -4040,10 +4043,10 @@ def tool_checker_eligibilite(args: Dict) -> str:
         "",
     ]
 
-    # LEP
-    seuil_lep = {1: 22_419, 2: 34_393, 3: 41_289, 4: 48_189}.get(int(nb_parts), 22_419 + (int(nb_parts)-1)*6_970)
+    # LEP — seuils 2026 (source : service-public.fr)
+    seuil_lep = {1: 23_028, 2: 35_326, 3: 47_624, 4: 59_922}.get(int(nb_parts), 23_028 + (int(nb_parts)-1)*12_298)
     if rfr <= seuil_lep:
-        lines.append(f"✅ **LEP** : Vous êtes éligible ! Ouvrez un Livret d'Épargne Populaire (3,5%, plafond 10 000€)")
+        lines.append(f"✅ **LEP** : Vous êtes éligible ! Ouvrez un Livret d'Épargne Populaire (2,5%, plafond 10 000€)")
     else:
         lines.append(f"❌ **LEP** : Non éligible (RFR {rfr:,.0f}€ > seuil {seuil_lep:,.0f}€)")
 
@@ -4226,13 +4229,13 @@ def tool_analyser_declaration(args: Dict) -> str:
                 "Au réel vous pouvez déduire toutes vos charges réelles."
             )
 
-    # RFR et LEP
+    # RFR et LEP — seuil 2026
     if rfr > 0:
-        seuil_lep = 22_419
+        seuil_lep = 23_028
         if rfr <= seuil_lep:
             conseils.append(
                 f"✅ **LEP éligible** : votre RFR ({rfr:,.0f}€) vous permet d'ouvrir un "
-                "Livret d'Épargne Populaire (3,5%, exonéré, plafond 10 000€)."
+                "Livret d'Épargne Populaire (2,5%, exonéré, plafond 10 000€)."
             )
 
     for a in alertes:
@@ -4474,8 +4477,8 @@ def tool_diagnostic_complet(args: Dict) -> str:
         epargne_conseils.append("- Ouvrir un **PEA** pour vos actions (exonération IR après 5 ans)")
     if not a_av:
         epargne_conseils.append("- Ouvrir une **assurance-vie** pour préparer transmission et épargne longue")
-    if not a_livret_plein and rfr_estime < 22_419:
-        epargne_conseils.append("- **LEP** : 3,5% défiscalisé — à maximiser en priorité !")
+    if not a_livret_plein and rfr_estime < 23_028:
+        epargne_conseils.append("- **LEP** : 2,5% défiscalisé — à maximiser en priorité !")
 
     if epargne_conseils:
         lines += [
