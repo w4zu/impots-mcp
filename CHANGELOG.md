@@ -5,6 +5,122 @@ Format : [Keep a Changelog](https://keepachangelog.com/fr/1.0.0/)
 
 ---
 
+## [2.9.0] — 2026-08-31
+
+### Corrigé — Calcul de l'impôt sur le revenu
+
+**Plafonnement du quotient familial** (art. 197-2 CGI) — jamais appliqué jusqu'ici
+- La constante `PLAFOND_DEMI_PART` n'était utilisée que dans du texte affiché : `calculer_ir()`
+  ne plafonnait pas l'avantage tiré des personnes à charge
+- Impact mesuré : couple avec 2 enfants à 100 000€ de RNI, impôt de 9 312€ → **12 594€** ;
+  à 300 000€, 74 402€ → **86 987€**
+- Ajout du plafond spécifique parent isolé « case T » : **4 262€**
+- Le plafond est désormais calculé par composition du foyer (`_plafond_quotient_familial`),
+  et non par simple comptage de demi-parts
+
+**Décote** — critère corrigé
+- Le choix entre décote « personne seule » et « couple » se faisait sur le nombre de parts :
+  un parent isolé avec un enfant (2 parts) recevait la décote couple
+- Le critère est désormais la situation du foyer (`seul` / `couple` / `parent_isole`)
+
+**Nombre de parts** (`calculer_parts`)
+- Un veuf avec enfant à charge conserve le quotient conjugal (2 parts de base, art. 194 CGI)
+- La majoration « case T » en garde alternée est due **par enfant** pour les deux premiers,
+  et non une seule fois
+
+**Erreurs d'exécution**
+- Quatre `ZeroDivisionError` corrigées : `calculer_pv_immobiliere` sur moins-value,
+  `simuler_scpi` et `comparer_pfu_bareme_capital` sur montant nul,
+  `checker_eligibilite_aides` sur zéro part
+- `calculer_pv_immobiliere` : le net perçu était calculé avant l'ajout de la taxe sur les
+  hautes plus-values, rendant le tableau incohérent avec son propre total
+- Le plancher du plafond PER n'était appliqué que sur deux des six sites de calcul
+- `_valider_revenu` rejette désormais les booléens
+
+**Modélisation**
+- LMNP : l'amortissement est plafonné au bénéfice avant amortissement (art. 39 C II CGI),
+  l'excédent est reporté sans limite de durée. Il ne peut plus créer de déficit
+- SCPI : les prélèvements sociaux sont calculés sur la base après abattement micro-foncier ;
+  la colonne « réel » recalculait en réalité la base micro et a été retirée
+
+### Mis à jour — Données fiscales août 2026
+
+**Impôt sur le revenu** (revenus 2025)
+- Décote : 889€ / 1 470€ → **897€ / 1 483€**, seuils 1 982€ / 3 277€
+- Abattement 10% frais professionnels : 495€ / 14 426€ → **509€ / 14 555€**
+  (le plancher accusait deux ans de retard)
+- Plafond quotient familial parent isolé : **4 262€** (absent du code)
+
+**Épargne réglementée** (Banque de France, depuis le 1er août 2026)
+- Livret A : 1,5% → **1,7%**
+- LDDS : 1,5% → **1,7%**
+- LEP : maintenu à 2,5%
+- Plafonds LEP calculés par quart de part, conformes aux 19 valeurs officielles
+
+**Cotisations et seuils sociaux**
+- PASS 2026 : **48 060€** (2025 : 47 100€, 2024 : 46 368€)
+- SMIC : **12,31€/h** soit 22 404€/an depuis le 1er juin 2026 (auparavant 21 622€)
+- Auto-entrepreneur : vente 12,8% → **12,3%**, services BIC 21,4% → **21,2%**,
+  BNC 23,1% → **25,6%**
+- Ajout de la catégorie **Cipav 23,2%** pour les professions libérales réglementées
+- Seuils micro-entreprise 2026-2028 : **83 600€ / 203 100€**, les seuils revenus 2025
+  (77 700€ / 188 700€) restant disponibles pour la déclaration
+- Seuils de franchise TVA maintenus à 37 500€ / 85 000€ (réforme à 25 000€ abandonnée)
+
+**Barème kilométrique** — périmé d'environ cinq ans
+- Valeurs officielles rétablies (5 CV : 0,548 → **0,636** sur la première tranche)
+- La part forfaitaire des tranches médianes est reprise du texte au lieu d'être reconstruite
+  (5 CV : 1 395€ au lieu de 1 110€)
+- Ajout de la **majoration de 20% pour véhicules électriques**
+- Les motos de plus de 5 CV étaient inatteignables, elles sont désormais distinguées
+- Ajout du barème **cyclomoteurs** (< 50 cm³), auparavant traités comme des motos
+
+**MaPrimeRénov'** — dispositif refondu au 1er janvier 2026
+- Les plafonds de ressources sont indexés sur le **nombre de personnes du ménage**,
+  et non sur le nombre de parts fiscales
+- Ajout des barèmes **Île-de-France**, absents jusqu'ici (1 personne : 24 031€ contre
+  17 363€ hors Île-de-France pour les très modestes)
+- Les aides sont des **forfaits en euros** et non des pourcentages : PAC air/eau
+  5 000 / 4 000 / 3 000€, PAC géothermique 11 000 / 9 000 / 6 000€, isolation de toiture
+  25 / 20 / 15€/m², parois vitrées 100 / 80 / 40€/équipement
+- Les ménages aux **revenus supérieurs ne sont plus éligibles** au parcours par geste
+- Chaudière bois, isolation des murs et isolation du plancher bas sont sorties du parcours
+  par geste ; le bonus sortie de passoire de 1 500€ n'existe plus
+- Ajout de la **rénovation d'ampleur** : taux 80 / 60 / 45 / 10%, plafonds 30 000€ et
+  40 000€ HT, écrêtement, prise en charge de Mon Accompagnateur Rénov'
+- Depuis le 1er septembre 2026, l'aide est refusée si un chauffage au gaz est conservé
+
+**Immobilier locatif**
+- LMNP : les amortissements déduits sont **réintégrés au calcul de la plus-value** de revente
+  (LF 2025, art. 150 VB II CGI). Le code affirmait exactement l'inverse
+- `calculer_pv_immobiliere` accepte `type_bien = lmnp`, `amortissements_deduits` et
+  `residence_services` (exclusion pour les résidences étudiantes, seniors et EHPAD)
+- Meublés de tourisme : classés 71% / 188 700€ → **50% / 77 700€**, ajout des
+  **non classés 30% / 15 000€**
+- Déficit foncier : le rehaussement à 21 400€ pour travaux énergétiques est éteint depuis
+  le 31 décembre 2025, la note le présentait encore comme une option
+
+### Modifié — Structure du code
+
+- Toutes les valeurs fiscales sont centralisées en constantes de module. Aucune n'est plus
+  écrite en dur dans le corps des outils : l'abattement de 10% était recopié dans dix endroits,
+  le SMIC dans trois, et deux valeurs différentes du PASS coexistaient sous le même nom
+- `PLAFOND_PER_MAX_2025` était affecté deux fois de suite, la première valeur étant morte
+- Nouvelles fonctions partagées : `abattement_frais_pro`, `frais_kilometriques`, `plafond_lep`,
+  `mpr_plafonds`, `mpr_aide_geste`, `pct_fr`
+- `calculer_parts` renvoie un objet `Parts` porteur des parts de base, du type de foyer et du
+  plafond de quotient familial, ce qui propage le plafonnement à tous les points d'appel
+- Sept schémas d'outils étaient désynchronisés du code : paramètres déclarés jamais lus
+  (`case_7WF`, `a_fait_travaux_recents`, `investissement_pme_envisage`, `valeur_terrain`,
+  `annees_blocage_restantes`, `situation_famille` et `nb_enfants` pour la crypto) ou lus sans
+  être déclarés (`annee_construction`, `invalide_contribuable`)
+- `calculer_fiscalite_crypto` accepte un revenu net imposable et calcule le TMI réel
+- `verifier_actualite_fiscale` lit les constantes au lieu de les recopier en littéraux
+- Les libellés d'année sont dérivés de `ANNEE_DECLARATION`
+- Accents rétablis dans les outils 2.6.0 à 2.8.0
+
+---
+
 ## [2.8.0] — 2026-04-12
 
 ### Mis à jour — Données fiscales avril 2026

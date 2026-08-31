@@ -8,3 +8,6 @@ __pycache__/
 .DS_Store
 .claude/
 CLAUDE.md
+tests/
+pyproject.toml
+.pytest_cache/

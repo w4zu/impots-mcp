@@ -4,15 +4,22 @@ MCP Impôts Français - Expert en optimisation fiscale pour particuliers et prof
 Spécialiste de l'impôt sur le revenu, IS, IFI, PER, cryptomonnaies,
 épargne salariale, transmission d'entreprise et SCI.
 
-Version : 2.8.0
+Version : 2.9.0
 Données : Barème IR 2026 +0,9% (revenus 2025, LFI n°2026-103 du 19/02/2026),
-          IFI 2026, PER 2026, IS 2025, Calendrier 2026 (dates officielles),
-          Livret A/LDDS 1,5% / LEP 2,5% (depuis 01/02/2026),
+          IFI 2026, PER 2026, IS 2026, Calendrier 2026 (dates officielles),
+          Livret A/LDDS 1,7% / LEP 2,5% (depuis 01/08/2026),
+          PASS 2026 48 060€, SMIC 2026 12,31€/h (depuis 01/06/2026),
+          Cotisations auto-entrepreneur 2026 (vente 12,3% / BIC 21,2% / BNC 25,6%),
+          Seuils micro 2026-2028 (83 600€ / 203 100€),
+          LMNP : réintégration des amortissements dans la PV (LF 2025),
+          MaPrimeRénov' 2026 (forfaits par geste, barèmes IDF / hors IDF),
+          Barème kilométrique (inchangé depuis 2023, majoration 20% électrique),
+          Plafonds LEP 2026, cotisations Cipav 23,2%,
           CEHR, Droits de donation/succession, SCPI, Crypto 2086,
           Retraite (réforme 2023), Fiscalité agricole, Outre-mer DOM-TOM
 """
 
-__version__ = "2.8.0"
+__version__ = "2.9.0"
 
 import json
 import sys
@@ -58,16 +65,126 @@ TRANCHES_IR_2026 = [
 
 # Barème actif (2026 = revenus 2025)
 TRANCHES_IR_ACTIF = TRANCHES_IR_2026
-ANNEE_FISCALE = "2026 (revenus 2025)"
+ANNEE_DECLARATION = 2026
+ANNEE_REVENUS = ANNEE_DECLARATION - 1
+ANNEE_FISCALE = f"{ANNEE_DECLARATION} (revenus {ANNEE_REVENUS})"
 
-# Plafond de la réduction du quotient familial par demi-part
-PLAFOND_DEMI_PART = 1_807  # 2026, euros par demi-part supplémentaire (LFI 2026 +0,9%)
+INDEXATION_2026 = 1.009
 
-# Plafond PER déductible (10% des revenus professionnels nets)
+PASS_2024 = 46_368
+PASS_2025 = 47_100
+PASS_2026 = 48_060
+PASS_ANNEE_COURANTE = PASS_2026
+
+TAUX_LIVRET_A = 0.017
+TAUX_LDDS = 0.017
+TAUX_LEP = 0.025
+DATE_TAUX_LIVRETS = "01/08/2026"
+
+COTISATIONS_AE_VENTE = 0.123
+COTISATIONS_AE_SERVICES_BIC = 0.212
+COTISATIONS_AE_BNC = 0.256
+COTISATIONS_AE_BNC_CIPAV = 0.232
+
+SEUIL_MICRO_VENTE_REVENUS_2025 = 188_700
+SEUIL_MICRO_SERVICES_REVENUS_2025 = 77_700
+SEUIL_MICRO_VENTE = 203_100
+SEUIL_MICRO_SERVICES = 83_600
+SEUIL_TVA_FRANCHISE_VENTE = 85_000
+SEUIL_TVA_FRANCHISE_SERVICES = 37_500
+
+
+def pct_fr(taux: float, decimales: int = 1) -> str:
+    """Formate un taux décimal en pourcentage à la française (virgule décimale)."""
+    return f"{taux * 100:.{decimales}f}".replace(".", ",") + "%"
+
+
+def frais_kilometriques(km: float, puissance_cv: int, type_vehicule: str = "voiture",
+                        electrique: bool = False) -> float:
+    """Indemnité kilométrique selon le barème forfaitaire (art. 83-3° CGI).
+
+    Chaque tranche est de la forme (coefficient, part forfaitaire) : d × coefficient + part.
+    Le montant est majoré de 20% pour les véhicules électriques.
+    """
+    km = max(0.0, float(km))
+    if km == 0:
+        return 0.0
+
+    if type_vehicule == "velo_electrique":
+        return km * BAREME_KM_VELO
+
+    if type_vehicule == "cyclomoteur":
+        tranches, tranches_vehicule = BAREME_KM_DEUX_ROUES_TRANCHES, BAREME_KM_CYCLOMOTEUR
+    elif type_vehicule == "moto":
+        cv = max(1, int(puissance_cv))
+        cle = "1_2_cv" if cv <= 2 else ("3_5_cv" if cv <= 5 else "plus_5_cv")
+        tranches, tranches_vehicule = BAREME_KM_DEUX_ROUES_TRANCHES, BAREME_KM_MOTO[cle]
+    else:
+        cle = min(max(int(puissance_cv), 3), 7)
+        tranches, tranches_vehicule = BAREME_KM_AUTO_TRANCHES, BAREME_KM_AUTO[cle]
+
+    if km <= tranches[0]:
+        coefficient, part = tranches_vehicule[0]
+    elif km <= tranches[1]:
+        coefficient, part = tranches_vehicule[1]
+    else:
+        coefficient, part = tranches_vehicule[2]
+
+    montant = km * coefficient + part
+    if electrique:
+        montant *= 1 + MAJORATION_KM_ELECTRIQUE
+    return montant
+
+
+def plafond_lep(nb_parts: float) -> int:
+    """Plafond de RFR pour l'ouverture d'un LEP, par quart de part de quotient familial."""
+    nb_parts = max(1.0, float(nb_parts))
+    return int(SEUIL_LEP_1_PART + (nb_parts - 1) / 0.5 * LEP_INCREMENT_DEMI_PART + 0.5)
+
+PLAFOND_DEMI_PART = 1_807
+PLAFOND_PARENT_ISOLE = 4_262
+
+DECOTE_TAUX = 0.4525
+DECOTE_MAX_SEUL = 897
+DECOTE_MAX_COUPLE = 1_483
+SEUIL_DECOTE_SEUL = round(DECOTE_MAX_SEUL / DECOTE_TAUX)
+SEUIL_DECOTE_COUPLE = round(DECOTE_MAX_COUPLE / DECOTE_TAUX)
+
+ABATTEMENT_FRAIS_PRO_TAUX = 0.10
+ABATTEMENT_FRAIS_PRO_MAX = 14_555
+ABATTEMENT_FRAIS_PRO_MIN = 509
+
+SMIC_BRUT_ANNUEL = 22_404
+
+BAREME_KM_AUTO = {
+    3: ((0.529, 0), (0.316, 1_065), (0.370, 0)),
+    4: ((0.606, 0), (0.340, 1_330), (0.407, 0)),
+    5: ((0.636, 0), (0.357, 1_395), (0.427, 0)),
+    6: ((0.665, 0), (0.374, 1_457), (0.447, 0)),
+    7: ((0.697, 0), (0.394, 1_515), (0.470, 0)),
+}
+BAREME_KM_AUTO_TRANCHES = (5_000, 20_000)
+MAJORATION_KM_ELECTRIQUE = 0.20
+
+BAREME_KM_MOTO = {
+    "1_2_cv": ((0.395, 0), (0.099, 891), (0.248, 0)),
+    "3_5_cv": ((0.468, 0), (0.082, 1_158), (0.275, 0)),
+    "plus_5_cv": ((0.606, 0), (0.079, 1_583), (0.343, 0)),
+}
+BAREME_KM_CYCLOMOTEUR = ((0.315, 0), (0.079, 711), (0.198, 0))
+BAREME_KM_DEUX_ROUES_TRANCHES = (3_000, 6_000)
+BAREME_KM_VELO = 0.25
+
+SEUIL_LEP_1_PART = 23_028
+LEP_INCREMENT_DEMI_PART = 6_149
+
+DEFICIT_FONCIER_PLAFOND = 10_700
+DEFICIT_FONCIER_PLAFOND_ENERGETIQUE = 21_400
+DEFICIT_FONCIER_ENERGETIQUE_FIN = "31/12/2025"
+
 PLAFOND_PER_POURCENTAGE = 0.10
-PLAFOND_PER_MAX_2025 = 35_194  # 10% de 8 PASS 2024 (historique)
-PLAFOND_PER_MAX_2025 = 37_094  # 10% de 8 PASS 2025 — utilisé pour déclaration 2026
-PLAFOND_PER_MIN_2025 = 4_637   # 10% du PASS 2025 (plancher)
+PLAFOND_PER_MAX_2025 = round(8 * PASS_2024 * PLAFOND_PER_POURCENTAGE)
+PLAFOND_PER_MIN_2025 = round(PASS_2024 * PLAFOND_PER_POURCENTAGE)
 
 # Crédits d'impôt principaux 2025
 CREDITS_IMPOT = {
@@ -166,7 +283,7 @@ EPARGNE_FISCALE = {
     "PER": {
         "nom": "Plan d'Épargne Retraite (PER individuel)",
         "avantage": "Versements déductibles du revenu imposable",
-        "plafond_2024": "10% des revenus professionnels nets (max 35 194€) ou 10% du PASS (4 637€)",
+        "plafond": f"10% des revenus professionnels nets (max {PLAFOND_PER_MAX_2025:,}€) ou 10% du PASS ({PLAFOND_PER_MIN_2025:,}€)",
         "sortie": "Capital ou rente à la retraite (fiscalisé). Sortie en capital possible (cas exceptionnels).",
         "remarque": "Économie d'impôt = versement × taux marginal d'imposition",
         "article": "Art. L224-1 Code monétaire",
@@ -187,20 +304,20 @@ EPARGNE_FISCALE = {
     },
     "LEP": {
         "nom": "Livret d'Épargne Populaire (LEP)",
-        "avantage": "Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : 2,5% (depuis 01/02/2026)",
+        "avantage": f"Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : {pct_fr(TAUX_LEP)} (depuis {DATE_TAUX_LIVRETS})",
         "plafond": "10 000€",
         "conditions": "Sous conditions de revenus (RFR ≤ 23 028€ pour 1 part en 2026)",
         "article": "Art. L221-13 Code monétaire",
     },
     "livret_A": {
         "nom": "Livret A",
-        "avantage": "Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : 1,5% (depuis 01/02/2026)",
+        "avantage": f"Intérêts exonérés d'impôt ET de prélèvements sociaux. Taux : {pct_fr(TAUX_LIVRET_A)} (depuis {DATE_TAUX_LIVRETS})",
         "plafond": "22 950€",
         "article": "Art. L221-1 Code monétaire",
     },
     "LDDS": {
         "nom": "Livret de Développement Durable et Solidaire (LDDS)",
-        "avantage": "Intérêts exonérés. Taux : 1,5% (depuis 01/02/2026)",
+        "avantage": f"Intérêts exonérés. Taux : {pct_fr(TAUX_LDDS)} (depuis {DATE_TAUX_LIVRETS})",
         "plafond": "12 000€",
         "article": "Art. L221-27 Code monétaire",
     },
@@ -210,7 +327,7 @@ EPARGNE_FISCALE = {
 DEDUCTIONS_REVENU = {
     "abattement_10pct": {
         "nom": "Abattement forfaitaire 10% frais professionnels",
-        "description": "Appliqué automatiquement sur les salaires. Min 495€, max 14 426€ par personne.",
+        "description": f"Appliqué automatiquement sur les salaires. Min {ABATTEMENT_FRAIS_PRO_MIN}€, max {ABATTEMENT_FRAIS_PRO_MAX:,}€ par personne.",
         "avantage": "Automatique - pas de justificatif requis",
     },
     "frais_reels": {
@@ -242,7 +359,7 @@ DEDUCTIONS_REVENU = {
     "deficit_foncier": {
         "nom": "Déficit foncier (revenus fonciers)",
         "description": "Le déficit foncier hors intérêts d'emprunt est déductible du revenu global à hauteur de 10 700€/an.",
-        "plafond_annuel": 10_700,
+        "plafond_annuel": DEFICIT_FONCIER_PLAFOND,
         "article": "Art. 156 I 3° CGI",
     },
     "csg_deductible": {
@@ -256,122 +373,116 @@ DEDUCTIONS_REVENU = {
 # Données MaPrimeRénov' 2025
 MAPRIMERENOV = {
     "categories": {
-        "bleu": {
-            "label": "MaPrimeRénov' Bleu (très modestes)",
-            "rfr_max_1part": 17_009,
-            "taux_isolation": 0.70,
-            "taux_chaudiere_bois": 0.50,
-            "taux_pompe_chaleur": 0.70,
-            "taux_fenetres": 0.40,
-            "couleur": "Bleu",
-        },
-        "jaune": {
-            "label": "MaPrimeRénov' Jaune (modestes)",
-            "rfr_max_1part": 21_805,
-            "taux_isolation": 0.60,
-            "taux_chaudiere_bois": 0.40,
-            "taux_pompe_chaleur": 0.50,
-            "taux_fenetres": 0.30,
-            "couleur": "Jaune",
-        },
-        "violet": {
-            "label": "MaPrimeRénov' Violet (intermédiaires)",
-            "rfr_max_1part": 30_549,
-            "taux_isolation": 0.40,
-            "taux_chaudiere_bois": 0.30,
-            "taux_pompe_chaleur": 0.30,
-            "taux_fenetres": 0.15,
-            "couleur": "Violet",
-        },
-        "rose": {
-            "label": "MaPrimeRénov' Rose (supérieurs)",
-            "rfr_max_1part": None,  # Tous les autres
-            "taux_isolation": 0.20,
-            "taux_chaudiere_bois": 0.15,
-            "taux_pompe_chaleur": 0.20,
-            "taux_fenetres": 0.00,
-            "couleur": "Rose",
-        },
+        "bleu":   {"label": "MaPrimeRénov' Bleu (très modestes)",     "rang": 0, "couleur": "Bleu"},
+        "jaune":  {"label": "MaPrimeRénov' Jaune (modestes)",         "rang": 1, "couleur": "Jaune"},
+        "violet": {"label": "MaPrimeRénov' Violet (intermédiaires)",  "rang": 2, "couleur": "Violet"},
+        "rose":   {"label": "MaPrimeRénov' Rose (supérieurs)",        "rang": None, "couleur": "Rose"},
     },
     "travaux": {
-        "isolation_combles": {
-            "nom": "Isolation des combles perdus / toiture",
-            "description": "Isolation thermique des combles ou de la toiture",
-            "cout_moyen_m2": 30,
-            "plafond_aide_m2": 25,
+        "raccordement_reseau_chaleur": {
+            "nom": "Raccordement à un réseau de chaleur et/ou de froid",
+            "unite": "forfait", "forfaits": (1_200, 800, 400), "plafond_depense": 1_800,
         },
-        "isolation_murs": {
-            "nom": "Isolation des murs (ITI ou ITE)",
-            "description": "Isolation des murs par l'intérieur ou l'extérieur",
-            "cout_moyen_m2": 80,
-            "plafond_aide_m2": 75,
-        },
-        "isolation_plancher": {
-            "nom": "Isolation du plancher bas",
-            "description": "Isolation du sol / plancher bas",
-            "cout_moyen_m2": 20,
-            "plafond_aide_m2": 7,
+        "chauffe_eau_thermodynamique": {
+            "nom": "Chauffe-eau thermodynamique",
+            "unite": "forfait", "forfaits": (1_200, 800, 400), "plafond_depense": 3_500,
         },
         "pompe_chaleur_air_eau": {
-            "nom": "Pompe à chaleur air/eau",
-            "description": "Remplacement chaudière fioul/gaz par PAC air/eau",
-            "cout_moyen": 12_000,
-            "plafond_aide": 10_000,
+            "nom": "Pompe à chaleur air/eau (dont PAC hybrides)",
+            "unite": "forfait", "forfaits": (5_000, 4_000, 3_000), "plafond_depense": 12_000,
         },
         "pompe_chaleur_geothermique": {
-            "nom": "Pompe à chaleur géothermique",
-            "description": "PAC eau/eau ou sol/eau",
-            "cout_moyen": 18_000,
-            "plafond_aide": 12_000,
+            "nom": "Pompe à chaleur géothermique ou solarothermique",
+            "unite": "forfait", "forfaits": (11_000, 9_000, 6_000), "plafond_depense": 18_000,
         },
-        "chaudiere_bois": {
-            "nom": "Chaudière à granulés ou à bûches",
-            "description": "Chaudière biomasse haute performance",
-            "cout_moyen": 15_000,
-            "plafond_aide": 12_000,
+        "chauffe_eau_solaire": {
+            "nom": "Chauffe-eau solaire individuel (Métropole)",
+            "unite": "forfait", "forfaits": (4_000, 3_000, 2_000), "plafond_depense": 7_000,
+        },
+        "chauffage_solaire_combine": {
+            "nom": "Chauffage solaire combiné",
+            "unite": "forfait", "forfaits": (10_000, 8_000, 4_000), "plafond_depense": 16_000,
+        },
+        "pvt_eau": {
+            "nom": "Partie thermique d'un équipement PVT eau",
+            "unite": "forfait", "forfaits": (2_500, 2_000, 1_000), "plafond_depense": 4_000,
+        },
+        "poele_buches": {
+            "nom": "Poêle ou cuisinière à bûches",
+            "unite": "forfait", "forfaits": (1_250, 1_000, 500), "plafond_depense": 4_000,
         },
         "poele_granules": {
-            "nom": "Poêle à granulés / insert bois",
-            "description": "Appareil de chauffage au bois performant",
-            "cout_moyen": 4_000,
-            "plafond_aide": 2_500,
+            "nom": "Poêle ou cuisinière à granulés",
+            "unite": "forfait", "forfaits": (1_250, 1_000, 750), "plafond_depense": 5_000,
+        },
+        "insert_foyer_ferme": {
+            "nom": "Foyer fermé, insert à bûches ou à granulés",
+            "unite": "forfait", "forfaits": (1_250, 750, 500), "plafond_depense": 4_000,
+        },
+        "isolation_rampants_combles": {
+            "nom": "Isolation des rampants de toiture ou plafonds de combles",
+            "unite": "m2", "forfaits": (25, 20, 15), "plafond_depense": 75,
+        },
+        "isolation_toiture_terrasse": {
+            "nom": "Isolation des toitures-terrasses",
+            "unite": "m2", "forfaits": (75, 60, 40), "plafond_depense": 180,
+        },
+        "fenetres": {
+            "nom": "Parois vitrées en remplacement de simple vitrage",
+            "unite": "equipement", "forfaits": (100, 80, 40), "plafond_depense": 1_000,
+        },
+        "audit_energetique": {
+            "nom": "Audit énergétique hors obligation réglementaire",
+            "unite": "forfait", "forfaits": (500, 400, 300), "plafond_depense": 800,
+            "condition": "conditionné à la réalisation concomitante d'au moins un geste de travaux",
+        },
+        "depose_cuve_fioul": {
+            "nom": "Dépose ou comblement de cuve à fioul",
+            "unite": "forfait", "forfaits": (1_200, 800, 400), "plafond_depense": 4_000,
         },
         "vmc_double_flux": {
             "nom": "VMC double flux",
-            "description": "Ventilation mécanique contrôlée double flux",
-            "cout_moyen": 5_000,
-            "plafond_aide": 2_500,
-        },
-        "fenetres": {
-            "nom": "Fenêtres / double vitrage",
-            "description": "Remplacement fenêtres simple vitrage par double vitrage",
-            "cout_moyen_unite": 800,
-            "plafond_aide_unite": 100,
-            "note": "Aide uniquement pour ménages bleus/jaunes/violets",
-        },
-        "audit_energetique": {
-            "nom": "Audit énergétique",
-            "description": "Audit obligatoire pour MaPrimeRénov' Parcours accompagné",
-            "cout_moyen": 700,
-            "plafond_aide": 500,
+            "unite": "forfait", "forfaits": (2_500, 2_000, 1_500), "plafond_depense": 6_000,
+            "condition": "conditionnée à la réalisation concomitante d'un geste d'isolation thermique",
         },
     },
-    "bonus_sortie_passoire": 1_500,  # Bonus si on sort du statut F/G
-    "note": "Les montants sont indicatifs. Simuler sur maprimerenov.gouv.fr",
+    "travaux_retires": {
+        "chaudiere_bois": "Chaudière à granulés ou à bûches",
+        "isolation_murs": "Isolation des murs (ITI ou ITE)",
+        "isolation_plancher": "Isolation du plancher bas",
+    },
+    "ecretement_geste_mpr_cee": (0.90, 0.75, 0.60),
+    "ampleur": {
+        "taux": (0.80, 0.60, 0.45, 0.10),
+        "ecretement": (1.00, 0.90, 0.80, 0.50),
+        "plafond_gain_2_classes": 30_000,
+        "plafond_gain_3_classes": 40_000,
+        "accompagnateur_plafond": 2_000,
+        "accompagnateur_prise_en_charge": (1.00, 0.80, 0.40, 0.20),
+    },
+    "note": "Montants indicatifs au 1er janvier 2026. Simuler sur maprimerenov.gouv.fr",
 }
 
-# Seuils de revenus MaPrimeRénov' 2025 pour différentes tailles de foyer
-MPR_SEUILS_2025 = {
-    # (nb_parts) : (bleu_max, jaune_max, violet_max)
-    1: (17_009, 21_805, 30_549),
-    1.5: (19_255, 24_701, 34_595),
-    2: (21_502, 27_596, 38_641),
-    2.5: (23_734, 30_490, 42_687),
-    3: (25_982, 33_399, 46_733),
-    3.5: (28_214, 36_293, 50_779),
-    4: (30_461, 39_188, 54_826),
-    4.5: (32_693, 42_082, 58_872),
-    5: (34_940, 44_977, 62_918),
+MPR_PLAFONDS = {
+    "hors_idf": {
+        1: (17_363, 22_259, 31_185),
+        2: (25_393, 32_553, 45_842),
+        3: (30_540, 39_148, 55_196),
+        4: (35_676, 45_735, 64_550),
+        5: (40_835, 52_348, 73_907),
+    },
+    "idf": {
+        1: (24_031, 29_253, 40_851),
+        2: (35_270, 42_933, 60_051),
+        3: (42_357, 51_564, 71_846),
+        4: (49_455, 60_208, 84_562),
+        5: (56_580, 68_877, 96_817),
+    },
+}
+
+MPR_INCREMENT_PAR_PERSONNE = {
+    "hors_idf": (5_151, 6_598, 9_357),
+    "idf": (7_116, 8_663, 12_257),
 }
 
 CALENDRIER_FISCAL_2026 = [
@@ -525,20 +636,26 @@ TNS_COTISATIONS = {
     "micro_be": {
         "label": "Micro-BIC (vente/hébergement)",
         "abattement": 0.71,
-        "seuil_ca": 188_700,
-        "taux_cotisations_sociales": 0.121,
+        "seuil_ca": SEUIL_MICRO_VENTE,
+        "taux_cotisations_sociales": COTISATIONS_AE_VENTE,
     },
     "micro_bic_services": {
         "label": "Micro-BIC (prestations de services)",
         "abattement": 0.50,
-        "seuil_ca": 77_700,
-        "taux_cotisations_sociales": 0.214,
+        "seuil_ca": SEUIL_MICRO_SERVICES,
+        "taux_cotisations_sociales": COTISATIONS_AE_SERVICES_BIC,
     },
     "micro_bnc": {
-        "label": "Micro-BNC (professions libérales)",
+        "label": "Micro-BNC (professions libérales non réglementées)",
         "abattement": 0.34,
-        "seuil_ca": 77_700,
-        "taux_cotisations_sociales": 0.214,
+        "seuil_ca": SEUIL_MICRO_SERVICES,
+        "taux_cotisations_sociales": COTISATIONS_AE_BNC,
+    },
+    "micro_bnc_cipav": {
+        "label": "Micro-BNC (professions libérales réglementées, Cipav)",
+        "abattement": 0.34,
+        "seuil_ca": SEUIL_MICRO_SERVICES,
+        "taux_cotisations_sociales": COTISATIONS_AE_BNC_CIPAV,
     },
     "reel_independant": {
         "label": "Régime réel (EI / EURL / SASU IS)",
@@ -793,9 +910,25 @@ ALSACE_MOSELLE = {
 
 # ─── Fonctions de calcul ──────────────────────────────────────────────────────
 
+class Parts(float):
+    """Nombre de parts fiscales, porteur du contexte nécessaire au plafonnement du quotient familial."""
+
+    parts_base: float
+    foyer: str
+    plafond_qf: Optional[float]
+
+    def __new__(cls, valeur: float, parts_base: float, foyer: str,
+                plafond_qf: Optional[float] = None) -> "Parts":
+        obj = super().__new__(cls, valeur)
+        obj.parts_base = float(parts_base)
+        obj.foyer = foyer
+        obj.plafond_qf = plafond_qf
+        return obj
+
+
 def _valider_revenu(valeur: float, nom: str = "revenu") -> float:
     """Valide et corrige un montant monétaire."""
-    if not isinstance(valeur, (int, float)) or valeur != valeur:  # NaN check
+    if isinstance(valeur, bool) or not isinstance(valeur, (int, float)) or valeur != valeur:
         raise ValueError(f"{nom} invalide : {valeur}")
     if valeur < 0:
         raise ValueError(f"{nom} ne peut pas être négatif ({valeur:,.0f}€)")
@@ -804,16 +937,17 @@ def _valider_revenu(valeur: float, nom: str = "revenu") -> float:
     return float(valeur)
 
 
-def calculer_ir(revenu_net_imposable: float, nb_parts: float, tranches: Optional[List] = None) -> Dict:
-    """Calcule l'impôt sur le revenu selon le quotient familial."""
-    if tranches is None:
-        tranches = TRANCHES_IR_ACTIF
-    revenu_net_imposable = _valider_revenu(revenu_net_imposable, "revenu_net_imposable")
-    nb_parts = max(0.5, float(nb_parts))
-    revenu_par_part = revenu_net_imposable / nb_parts
-    impot_par_part = 0.0
-    detail_tranches = []
+def abattement_frais_pro(salaire_net: float) -> float:
+    """Abattement forfaitaire de 10% pour frais professionnels, encadré par son plancher et son plafond."""
+    if salaire_net <= 0:
+        return 0.0
+    return min(max(salaire_net * ABATTEMENT_FRAIS_PRO_TAUX, ABATTEMENT_FRAIS_PRO_MIN), ABATTEMENT_FRAIS_PRO_MAX)
 
+
+def _bareme_ir(revenu_par_part: float, tranches: List) -> tuple:
+    """Applique le barème progressif à un revenu par part et renvoie (impôt, détail des tranches)."""
+    impot = 0.0
+    detail = []
     for tranche in tranches:
         if revenu_par_part <= tranche["min"]:
             break
@@ -821,39 +955,87 @@ def calculer_ir(revenu_net_imposable: float, nb_parts: float, tranches: Optional
         montant_dans_tranche = min(revenu_par_part, max_tranche) - tranche["min"]
         impot_tranche = montant_dans_tranche * tranche["taux"]
         if tranche["taux"] > 0:
-            detail_tranches.append({
+            detail.append({
                 "tranche": f"{tranche['min']:,}€ - {tranche['max']:,}€" if tranche["max"] else f"+ {tranche['min']:,}€",
                 "taux": f"{tranche['taux']*100:.0f}%",
                 "base": f"{montant_dans_tranche:,.0f}€",
                 "impot": f"{impot_tranche:,.0f}€",
             })
-        impot_par_part += impot_tranche
+        impot += impot_tranche
+    return impot, detail
 
-    impot_brut = impot_par_part * nb_parts
 
-    # Décote 2026 (estimée +1.8% vs 2025) — vérifier sur impots.gouv.fr
-    seuil_decote_seul = 1_964
-    seuil_decote_couple = 3_249
+def calculer_ir(revenu_net_imposable: float, nb_parts: float, tranches: Optional[List] = None,
+                parts_base: Optional[float] = None, foyer: Optional[str] = None,
+                plafond_qf: Optional[float] = None) -> Dict:
+    """Calcule l'impôt sur le revenu : barème, plafonnement du quotient familial (art. 197-2 CGI) puis décote.
+
+    parts_base : parts du foyer sans personne à charge (1 pour une personne seule, 2 pour un couple
+    soumis à imposition commune ou un veuf avec enfant à charge).
+    foyer : "seul", "couple" ou "parent_isole". Déduits de nb_parts lorsqu'il s'agit d'un objet Parts.
+    """
+    if tranches is None:
+        tranches = TRANCHES_IR_ACTIF
+    revenu_net_imposable = _valider_revenu(revenu_net_imposable, "revenu_net_imposable")
+
+    if parts_base is None:
+        parts_base = getattr(nb_parts, "parts_base", None)
+    if foyer is None:
+        foyer = getattr(nb_parts, "foyer", None)
+    if plafond_qf is None:
+        plafond_qf = getattr(nb_parts, "plafond_qf", None)
+
+    nb_parts = max(0.5, float(nb_parts))
+    if parts_base is None:
+        parts_base = 2.0 if nb_parts >= 2 else 1.0
+    parts_base = min(max(0.5, float(parts_base)), nb_parts)
+    if foyer is None:
+        foyer = "couple" if parts_base >= 2 else "seul"
+
+    impot_par_part, detail_tranches = _bareme_ir(revenu_net_imposable / nb_parts, tranches)
+    impot_bareme = impot_par_part * nb_parts
+
+    demi_parts_sup = round((nb_parts - parts_base) / 0.5, 4)
+    impot_brut = impot_bareme
+    if demi_parts_sup <= 0:
+        plafond_qf = 0.0
+    else:
+        impot_base_par_part, _ = _bareme_ir(revenu_net_imposable / parts_base, tranches)
+        impot_sans_charges = impot_base_par_part * parts_base
+        if plafond_qf is None:
+            if foyer == "parent_isole":
+                demi_parts_isole = min(demi_parts_sup, 2.0)
+                plafond_qf = (demi_parts_isole / 2.0) * PLAFOND_PARENT_ISOLE \
+                    + max(0.0, demi_parts_sup - 2.0) * PLAFOND_DEMI_PART
+            else:
+                plafond_qf = demi_parts_sup * PLAFOND_DEMI_PART
+        impot_brut = max(impot_bareme, impot_sans_charges - plafond_qf)
+
+    plafonnement_applique = round(impot_brut - impot_bareme, 2)
+
+    if foyer == "couple":
+        seuil_decote, decote_max = SEUIL_DECOTE_COUPLE, DECOTE_MAX_COUPLE
+    else:
+        seuil_decote, decote_max = SEUIL_DECOTE_SEUL, DECOTE_MAX_SEUL
 
     decote = 0.0
-    if nb_parts < 2:
-        if impot_brut < seuil_decote_seul:
-            decote = max(0, 889 - (0.4525 * impot_brut))
-    else:
-        if impot_brut < seuil_decote_couple:
-            decote = max(0, 1_470 - (0.4525 * impot_brut))
+    if impot_brut < seuil_decote:
+        decote = max(0.0, decote_max - DECOTE_TAUX * impot_brut)
 
-    impot_apres_decote = max(0, impot_brut - decote)
+    impot_apres_decote = max(0.0, impot_brut - decote)
 
-    # Taux moyen et taux marginal
     taux_moyen = (impot_apres_decote / revenu_net_imposable * 100) if revenu_net_imposable > 0 else 0
     taux_marginal = 0.0
+    revenu_par_part = revenu_net_imposable / nb_parts
     for tranche in tranches:
         if revenu_par_part > tranche["min"]:
             taux_marginal = tranche["taux"] * 100
 
     return {
         "impot_brut": round(impot_brut, 2),
+        "impot_avant_plafonnement": round(impot_bareme, 2),
+        "plafonnement_qf": plafonnement_applique,
+        "plafond_qf": round(plafond_qf, 2),
         "decote": round(decote, 2),
         "impot_net": round(impot_apres_decote, 2),
         "taux_moyen": round(taux_moyen, 2),
@@ -862,48 +1044,80 @@ def calculer_ir(revenu_net_imposable: float, nb_parts: float, tranches: Optional
     }
 
 
+def _plafond_quotient_familial(nb_enfants: int, nb_enfants_garde_alternee: int,
+                              enfants_handicap: int, parent_isole: bool) -> float:
+    """Plafond de l'avantage en impôt tiré des majorations de quotient familial (art. 197 I-2 CGI).
+
+    Chaque demi-part de majoration est plafonnée à PLAFOND_DEMI_PART, chaque quart de part à la
+    moitié. Pour un parent isolé, la majoration attachée au premier enfant à charge (part entière,
+    ou demi-part si l'enfant est en résidence alternée) relève du plafond spécifique « case T ».
+    """
+    plafond_par_part = PLAFOND_DEMI_PART / 0.5
+
+    parts_enfants = [0.5 if rang <= 2 else 1.0 for rang in range(1, nb_enfants + 1)]
+    parts_enfants += [0.25 if nb_enfants + rang <= 2 else 0.5
+                      for rang in range(1, nb_enfants_garde_alternee + 1)]
+
+    plafond = enfants_handicap * PLAFOND_DEMI_PART
+
+    if parent_isole and parts_enfants:
+        majoration_premier = 0.5 if nb_enfants > 0 else 0.25
+        plafond += PLAFOND_PARENT_ISOLE * (parts_enfants[0] + majoration_premier)
+        plafond += sum(part * plafond_par_part for part in parts_enfants[1:])
+        if nb_enfants == 0:
+            majorations_restantes = max(0, min(nb_enfants_garde_alternee, 2) - 1) * 0.25
+            plafond += majorations_restantes * plafond_par_part
+    else:
+        plafond += sum(part * plafond_par_part for part in parts_enfants)
+
+    return plafond
+
+
 def calculer_parts(situation_famille: str, nb_enfants: int, enfants_handicap: int = 0,
-                   nb_enfants_garde_alternee: int = 0) -> float:
+                   nb_enfants_garde_alternee: int = 0, parent_isole: Optional[bool] = None) -> Parts:
     """Calcule le nombre de parts fiscales.
 
-    nb_enfants_garde_alternee : enfants en garde alternée (comptés 0.5 part au lieu de 1 part).
+    nb_enfants_garde_alternee : enfants en garde alternée (comptés pour la moitié du droit normal).
     Ces enfants ne doivent PAS être inclus dans nb_enfants.
+    parent_isole : force ou désactive la majoration « case T ». Déduit de la situation par défaut.
     """
-    parts = {
-        "celibataire": 1.0,
-        "marie": 2.0,
-        "pacse": 2.0,
-        "divorce": 1.0,
-        "veuf": 1.0,
-    }.get(situation_famille.lower(), 1.0)
+    situation = str(situation_famille).lower()
+    nb_enfants = max(0, int(nb_enfants))
+    nb_enfants_garde_alternee = max(0, int(nb_enfants_garde_alternee))
+    enfants_handicap = max(0, int(enfants_handicap))
+    nb_enfants_total = nb_enfants + nb_enfants_garde_alternee
 
-    # Enfants à charge exclusive
-    nb_total = nb_enfants  # enfants en garde exclusive pour calcul des tranches
+    couple = situation in ("marie", "pacse")
+    veuf_avec_enfants = situation == "veuf" and nb_enfants_total > 0
+
+    parts_base = 2.0 if couple or veuf_avec_enfants else 1.0
+    parts = parts_base
+
     for i in range(1, nb_enfants + 1):
-        if i <= 2:
-            parts += 0.5
-        else:
-            parts += 1.0  # À partir du 3ème enfant
+        parts += 0.5 if i <= 2 else 1.0
 
-    # Enfants en garde alternée : +0.25 part par enfant (moitié du droit normal)
-    # Les 2 premiers enfants valent 0.5 chacun en exclusif → 0.25 en alternée
-    # À partir du 3ème : 1.0 en exclusif → 0.5 en alternée
     for i in range(1, nb_enfants_garde_alternee + 1):
-        rang = nb_total + i
-        if rang <= 2:
-            parts += 0.25
-        else:
-            parts += 0.5
+        rang = nb_enfants + i
+        parts += 0.25 if rang <= 2 else 0.5
 
-    # Enfants handicapés : +0.5 part supplémentaire par enfant
     parts += enfants_handicap * 0.5
 
-    # Parent isolé avec enfants : +0.5 part
-    nb_enfants_total = nb_enfants + nb_enfants_garde_alternee
-    if situation_famille.lower() in ["celibataire", "divorce"] and nb_enfants_total > 0:
-        parts += 0.5
+    if parent_isole is None:
+        parent_isole = (not couple) and (not veuf_avec_enfants) and nb_enfants_total > 0
+    if parent_isole:
+        parts += 0.5 if nb_enfants > 0 else min(nb_enfants_garde_alternee, 2) * 0.25
 
-    return parts
+    if couple:
+        foyer = "couple"
+    elif parent_isole:
+        foyer = "parent_isole"
+    else:
+        foyer = "seul"
+
+    plafond = _plafond_quotient_familial(nb_enfants, nb_enfants_garde_alternee,
+                                        enfants_handicap, parent_isole)
+    return Parts(parts, parts_base, foyer, plafond)
+
 
 
 def calculer_ifi_montant(patrimoine_net: float) -> Dict:
@@ -1002,6 +1216,11 @@ TOOLS = [
                 "age_contribuable": {
                     "type": "integer",
                     "description": "Âge du contribuable principal (pour abattement +65 ans)",
+                },
+                "invalide_contribuable": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Le contribuable est-il invalide (carte d'invalidité) ?",
                 },
             },
             "required": ["revenu_net_imposable", "situation_famille"],
@@ -1244,14 +1463,19 @@ TOOLS = [
                 },
                 "type_vehicule": {
                     "type": "string",
-                    "enum": ["voiture", "moto", "velo_electrique"],
-                    "description": "Type de véhicule utilisé",
+                    "enum": ["voiture", "moto", "cyclomoteur", "velo_electrique"],
+                    "description": "Type de véhicule : moto = cylindrée > 50 cm3, cyclomoteur = cylindrée < 50 cm3",
                     "default": "voiture",
                 },
                 "puissance_fiscale": {
                     "type": "integer",
                     "description": "Puissance fiscale du véhicule en CV (pour voiture/moto)",
                     "default": 5,
+                },
+                "vehicule_electrique": {
+                    "type": "boolean",
+                    "description": "Véhicule électrique : majoration de 20% du barème kilométrique",
+                    "default": False,
                 },
             },
             "required": ["salaire_net_annuel"],
@@ -1414,7 +1638,7 @@ TOOLS = [
                 "travaux_envisages": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Travaux envisagés (ex: ['isolation_combles', 'pompe_chaleur_air_eau', 'fenetres'])",
+                    "description": "Travaux envisagés (ex: ['isolation_rampants_combles', 'pompe_chaleur_air_eau', 'fenetres'])",
                 },
                 "budget_travaux": {"type": "number", "description": "Budget total envisagé pour les travaux"},
                 # Épargne et investissements
@@ -1460,23 +1684,46 @@ TOOLS = [
                     "type": "number",
                     "description": "Revenu fiscal de référence (RFR) du foyer",
                 },
+                "nb_personnes": {
+                    "type": "integer",
+                    "description": "Nombre de personnes composant le ménage (base des barèmes Anah). À défaut, déduit de nb_parts.",
+                    "default": 0,
+                },
                 "nb_parts": {
                     "type": "number",
-                    "description": "Nombre de parts fiscales",
+                    "description": "Nombre de parts fiscales (utilisé seulement si nb_personnes n'est pas fourni)",
                     "default": 1,
+                },
+                "ile_de_france": {
+                    "type": "boolean",
+                    "description": "Logement situé en Île-de-France (barème de ressources distinct)",
+                    "default": False,
                 },
                 "travaux_envisages": {
                     "type": "array",
                     "items": {
                         "type": "string",
                         "enum": [
-                            "isolation_combles", "isolation_murs", "isolation_plancher",
+                            "raccordement_reseau_chaleur", "chauffe_eau_thermodynamique",
                             "pompe_chaleur_air_eau", "pompe_chaleur_geothermique",
-                            "chaudiere_bois", "poele_granules", "vmc_double_flux",
-                            "fenetres", "audit_energetique"
+                            "chauffe_eau_solaire", "chauffage_solaire_combine", "pvt_eau",
+                            "poele_buches", "poele_granules", "insert_foyer_ferme",
+                            "isolation_rampants_combles", "isolation_toiture_terrasse",
+                            "fenetres", "audit_energetique", "depose_cuve_fioul",
+                            "vmc_double_flux"
                         ]
                     },
-                    "description": "Liste des travaux envisagés",
+                    "description": "Gestes envisagés, parmi ceux encore éligibles au parcours par geste en 2026",
+                },
+                "surface_isolee_m2": {
+                    "type": "number",
+                    "description": "Surface à isoler en m² (pour les gestes facturés au m²)",
+                    "default": 0,
+                },
+                "nb_fenetres": {
+                    "type": "integer",
+                    "description": "Nombre de parois vitrées à remplacer",
+                    "default": 0,
                 },
                 "budget_total": {
                     "type": "number",
@@ -1589,7 +1836,7 @@ TOOLS = [
                 },
                 "type_activite": {
                     "type": "string",
-                    "enum": ["vente_marchandises", "prestations_services_bic", "prestations_liberales_bnc"],
+                    "enum": ["vente_marchandises", "prestations_services_bic", "prestations_liberales_bnc", "prestations_liberales_cipav"],
                     "description": "Type d'activité",
                 },
                 "chiffre_affaires": {
@@ -2005,8 +2252,13 @@ TOOLS = [
                 },
                 "tmi": {
                     "type": "number",
-                    "description": "Tranche marginale d'imposition en % (pour comparer PFU vs barème IR)",
+                    "description": "Tranche marginale d'imposition en % (ignoré si revenu_net_imposable est fourni)",
                     "default": 30,
+                },
+                "revenu_net_imposable": {
+                    "type": "number",
+                    "description": "Revenu net imposable du foyer hors crypto (permet de calculer le TMI réel)",
+                    "default": 0,
                 },
                 "situation_famille": {
                     "type": "string",
@@ -2607,7 +2859,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "chiffre_affaires_annuel": {"type": "number", "default": 0},
-                "type_activite": {"type": "string", "enum": ["vente_marchandises","services_bic","services_bnc"], "default": "services_bic"},
+                "type_activite": {"type": "string", "enum": ["vente_marchandises","services_bic","services_bnc","services_bnc_cipav"], "default": "services_bic"},
                 "option_versement_liberatoire": {"type": "boolean", "default": False},
                 "rni_foyer_n_moins_2": {"type": "number", "default": 0, "description": "RFR du foyer de l'année N-2 (condition VFL)"},
                 "nb_parts_foyer": {"type": "number", "default": 1.0},
@@ -2684,7 +2936,8 @@ TOOLS = [
             "Calcule la plus-value immobilière avec tous les mécanismes officiels : "
             "frais d'acquisition 7.5% forfaitaires, travaux 15% forfaitaires après 5 ans, "
             "abattements IR (19%) et PS (17.2%) par durée de détention, "
-            "exonération résidence principale, taxe sur hautes plus-values (2% à 6%)."
+            "exonération résidence principale, taxe sur hautes plus-values (2% à 6%), "
+            "réintégration des amortissements pour les biens exploités en LMNP (LF 2025)."
         ),
         inputSchema={
             "type": "object",
@@ -2694,7 +2947,9 @@ TOOLS = [
                 "frais_achat": {"type": "number", "default": 0, "description": "Frais d'acquisition réels (notaire, agence)"},
                 "travaux_justifies": {"type": "number", "default": 0, "description": "Montant des travaux justifiés par factures"},
                 "duree_detention_ans": {"type": "integer", "default": 0},
-                "type_bien": {"type": "string", "enum": ["residence_principale","secondaire","locatif","terrain"], "default": "secondaire"},
+                "type_bien": {"type": "string", "enum": ["residence_principale","secondaire","locatif","lmnp","terrain"], "default": "secondaire"},
+                "amortissements_deduits": {"type": "number", "default": 0, "description": "Cumul des amortissements déduits en LMNP réel, réintégrés au calcul de la plus-value (LF 2025)"},
+                "residence_services": {"type": "boolean", "default": False, "description": "Logement en résidence services (étudiante, senior, EHPAD) : exclu de la réintégration des amortissements"},
                 "primo_accedant_acheteur": {"type": "boolean", "default": False},
             },
             "required": ["prix_vente"],
@@ -2805,8 +3060,10 @@ TOOLS = [
         name="simuler_lmnp",
         description=(
             "Simulation LMNP (Location Meublee Non Professionnelle) : "
-            "compare micro-BIC (abattement 50% ou 71%) vs regime reel avec amortissement. "
+            "compare micro-BIC (abattement 50% longue duree, 50% tourisme classe, 30% tourisme non classe) "
+            "vs regime reel avec amortissement plafonne au benefice. "
             "Calcule l'amortissement du batiment et du mobilier, le deficit reportable, "
+            "la reintegration des amortissements dans la plus-value de revente (LF 2025), "
             "et recommande le regime optimal."
         ),
         inputSchema={
@@ -2819,7 +3076,16 @@ TOOLS = [
                 "charges_annuelles": {"type": "number", "description": "Charges courantes : copropriete, assurance, frais de gestion", "default": 0},
                 "interets_emprunt_annuels": {"type": "number", "description": "Interets d'emprunt annuels", "default": 0},
                 "taxe_fonciere": {"type": "number", "description": "Taxe fonciere annuelle", "default": 0},
-                "type_location": {"type": "string", "enum": ["classique", "tourisme_classe"], "description": "classique (abatt. 50%) ou tourisme_classe/VFT (abatt. 71%)", "default": "classique"},
+                "type_location": {
+                    "type": "string",
+                    "enum": ["classique", "tourisme_classe", "tourisme_non_classe"],
+                    "description": (
+                        "classique = location meublee longue duree (abatt. 50%, seuil 77 700 EUR) ; "
+                        "tourisme_classe (abatt. 50%, seuil 77 700 EUR depuis la LF 2025) ; "
+                        "tourisme_non_classe type Airbnb (abatt. 30%, seuil 15 000 EUR)"
+                    ),
+                    "default": "classique",
+                },
                 "situation_famille": {"type": "string", "enum": ["celibataire", "marie", "pacse", "divorce", "veuf"], "default": "celibataire"},
                 "nb_enfants": {"type": "integer", "default": 0},
                 "rni_autres_revenus": {"type": "number", "description": "Autres revenus nets imposables du foyer", "default": 0},
@@ -2968,7 +3234,7 @@ TOOLS = [
                 },
                 "type_activite": {
                     "type": "string",
-                    "enum": ["services_bnc", "services_bic", "vente_marchandises"],
+                    "enum": ["services_bnc", "services_bnc_cipav", "services_bic", "vente_marchandises"],
                     "description": "Type d'activite : services_bnc (liberal/conseil/IT), services_bic (artisan/commerce), vente_marchandises",
                     "default": "services_bnc",
                 },
@@ -3073,7 +3339,7 @@ TOOLS = [
                 },
                 "type_activite": {
                     "type": "string",
-                    "enum": ["services_bnc", "services_bic", "vente_marchandises"],
+                    "enum": ["services_bnc", "services_bnc_cipav", "services_bic", "vente_marchandises"],
                     "description": "Type fiscal : services_bnc (liberal/conseil/IT), services_bic (artisan/commerce), vente_marchandises",
                     "default": "services_bnc",
                 },
@@ -3194,10 +3460,9 @@ def tool_calculer_impot_revenu(args: Dict) -> str:
     nb_parts_custom = args.get("nb_parts_custom")
     annee = int(args.get("annee", 2026))
 
+    nb_parts = calculer_parts(situation, nb_enfants, enfants_handicap, nb_enfants_ga)
     if nb_parts_custom:
-        nb_parts = float(nb_parts_custom)
-    else:
-        nb_parts = calculer_parts(situation, nb_enfants, enfants_handicap, nb_enfants_ga)
+        nb_parts = Parts(float(nb_parts_custom), nb_parts.parts_base, nb_parts.foyer)
 
     # Bug B — Abattement personnes âgées/invalides
     age = args.get("age_contribuable")
@@ -3339,7 +3604,7 @@ def tool_optimiser_impots(args: Dict) -> str:
     impot = res["impot_net"]
 
     # Calcul plafond PER
-    plafond_per = min(rni * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025)
+    plafond_per = max(min(rni * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
     plafond_per_restant = max(0, plafond_per - versements_per)
 
     lines = [
@@ -3427,7 +3692,7 @@ def tool_optimiser_impots(args: Dict) -> str:
             f"#### {prio}. Frais réels professionnels",
             "- Si vos frais > 10% de votre salaire net, les frais réels sont plus avantageux",
             "- Incluez : frais kilométriques, repas, formation, matériel...",
-            f"- Abattement forfaitaire actuel : 10% du salaire (max 14 426€)",
+            f"- Abattement forfaitaire actuel : 10% du salaire (max {ABATTEMENT_FRAIS_PRO_MAX:,}€)",
             "- Utilisez l'outil **guide_frais_reels** pour simuler",
             "",
         ]
@@ -3436,10 +3701,10 @@ def tool_optimiser_impots(args: Dict) -> str:
     # Épargne défiscalisée
     lines += [
         f"#### {prio}. Maximisez votre épargne défiscalisée",
-        "- **Livret A** : 1,5% sans impôt ni prélèvements sociaux (plafond 22 950€)",
+        f"- **Livret A** : {pct_fr(TAUX_LIVRET_A)} sans impôt ni prélèvements sociaux (plafond 22 950€)",
     ]
-    if rni / nb_parts < 23_028:
-        lines.append("- **LEP** : vous semblez éligible ! 2,5% défiscalisé (plafond 10 000€) — vérifiez sur impots.gouv.fr")
+    if rni / nb_parts < plafond_lep(nb_parts):
+        lines.append(f"- **LEP** : vous semblez éligible ! {pct_fr(TAUX_LEP)} défiscalisé (plafond 10 000€) — vérifiez sur impots.gouv.fr")
     lines += [
         "- **PEA** : plus-values exonérées après 5 ans (plafond 150 000€)",
         "- **Assurance-vie** : exonération après 8 ans (abattement 4 600€/9 200€ par an)",
@@ -3490,7 +3755,7 @@ def tool_calculer_economie_per(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     # Plafond PER
-    plafond_per = min(revenu_pro * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025)
+    plafond_per = max(min(revenu_pro * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
     plafond_effectif = max(plafond_per, PLAFOND_PER_MIN_2025)
 
     versement_deductible = min(versement, plafond_effectif)
@@ -3635,8 +3900,6 @@ def tool_lister_epargne(args: Dict) -> str:
         ]
         if ep.get("plafond"):
             lines.append(f"- **Plafond** : {ep['plafond']}")
-        if ep.get("plafond_2024"):
-            lines.append(f"- **Plafond 2024** : {ep['plafond_2024']}")
         if ep.get("conditions"):
             lines.append(f"- **Conditions** : {ep['conditions']}")
         lines += [
@@ -3711,70 +3974,33 @@ def tool_guide_frais_reels(args: Dict) -> str:
     nb_jours = int(args.get("nb_jours_travail", 220))
     type_vehicule = args.get("type_vehicule", "voiture")
     cv = int(args.get("puissance_fiscale", 5))
+    vehicule_electrique = bool(args.get("vehicule_electrique", False))
 
-    abattement_auto = min(salaire_net * 0.10, 14_426)
-    abattement_auto = max(abattement_auto, 495)
+    abattement_auto = abattement_frais_pro(salaire_net)
 
     lines = [
         "## Guide Frais Réels Professionnels",
         "",
         f"**Abattement forfaitaire automatique** : {abattement_auto:,.0f}€",
-        "(10% du salaire net, min 495€, max 14 426€)",
+        f"(10% du salaire net, min {ABATTEMENT_FRAIS_PRO_MIN}€, max {ABATTEMENT_FRAIS_PRO_MAX:,}€)",
         "",
         "### Quand opter pour les frais réels ?",
         f"Si vos frais réels dépassent {abattement_auto:,.0f}€",
         "",
     ]
 
-    # Calcul frais kilométriques si renseigné
     if distance_km > 0:
-        # Barème kilométrique 2024 (voiture 5CV à titre d'exemple)
-        bareme = {
-            "voiture": {
-                3: (0.456, 0.272, 0.318),
-                4: (0.523, 0.311, 0.364),
-                5: (0.548, 0.326, 0.381),
-                6: (0.574, 0.342, 0.400),
-                7: (0.601, 0.358, 0.418),
-            },
-            "moto": {
-                1: (0.395, 0.099, 0.209),
-                2: (0.468, 0.117, 0.247),
-                3: (0.606, 0.151, 0.320),
-                5: (0.606, 0.151, 0.320),
-            },
-        }
-
-        km_annuels = distance_km * 2 * nb_jours  # aller-retour
-
-        if type_vehicule == "voiture":
-            cv_key = min(cv, 7) if cv <= 7 else 7
-            cv_key = max(cv_key, 3)
-            taux_km = bareme["voiture"].get(cv_key, bareme["voiture"][5])
-            if km_annuels <= 5_000:
-                indemnite = km_annuels * taux_km[0]
-            elif km_annuels <= 20_000:
-                indemnite = km_annuels * taux_km[1] + 5_000 * (taux_km[0] - taux_km[1])
-            else:
-                indemnite = km_annuels * taux_km[2]
-        elif type_vehicule == "moto":
-            cv_key = min(cv, 5) if cv >= 3 else (2 if cv == 2 else 1)
-            taux_km = bareme["moto"].get(cv_key, (0.395, 0.099, 0.209))
-            if km_annuels <= 3_000:
-                indemnite = km_annuels * taux_km[0]
-            elif km_annuels <= 6_000:
-                indemnite = km_annuels * taux_km[1] + 3_000 * (taux_km[0] - taux_km[1])
-            else:
-                indemnite = km_annuels * taux_km[2]
-        else:  # velo_electrique
-            indemnite = km_annuels * 0.25  # forfait
+        km_annuels = distance_km * 2 * nb_jours
+        indemnite = frais_kilometriques(km_annuels, cv, type_vehicule, vehicule_electrique)
 
         lines += [
-            f"### Frais kilométriques estimés ({type_vehicule} {cv}CV)",
+            f"### Frais kilométriques ({type_vehicule} {cv}CV{', électrique' if vehicule_electrique else ''})",
             f"- Distance : {distance_km} km × 2 × {nb_jours} jours = {km_annuels:,.0f} km/an",
             f"- **Indemnité kilométrique : {indemnite:,.0f}€**",
-            "",
         ]
+        if vehicule_electrique:
+            lines.append(f"- Majoration véhicule électrique de {MAJORATION_KM_ELECTRIQUE*100:.0f}% incluse")
+        lines.append("")
 
         if indemnite > abattement_auto:
             lines.append(f"✅ Les frais kilométriques seuls ({indemnite:,.0f}€) dépassent l'abattement automatique ({abattement_auto:,.0f}€).")
@@ -3965,11 +4191,11 @@ def tool_info_immobilier(args: Dict) -> str:
         lines += [
             "### Location Meublée Non Professionnelle (LMNP)",
             "",
-            "**Régime micro-BIC — depuis LF 2024**",
-            "- LMNP classique (non touristique) : abattement **50%** si recettes < 77 700€/an",
+            "**Régime micro-BIC**",
+            "- LMNP classique (longue durée, non touristique) : abattement **50%** si recettes < 77 700€/an",
             f"  → Si loyers = {loyers:,.0f}€ → imposable : {loyers*0.50:,.0f}€",
-            "- Meublé de tourisme **non classé** : abattement **30%**, seuil ramené à 15 000€/an (depuis 2024)",
-            "- Meublé de tourisme **classé** : abattement **71%**, seuil 188 700€/an",
+            "- Meublé de tourisme **non classé** : abattement **30%**, seuil 15 000€/an",
+            "- Meublé de tourisme **classé** : abattement **50%**, seuil 77 700€/an (LF 2025 : auparavant 71% / 188 700€)",
             "",
             "**Régime réel** (recommandé si charges importantes)",
             "- Déduisez : charges courantes + **amortissement du bien et du mobilier**",
@@ -3979,7 +4205,14 @@ def tool_info_immobilier(args: Dict) -> str:
             "### Avantages LMNP réel",
             "- Amortissement du bien sur 25-40 ans (2-4%/an)",
             "- Amortissement du mobilier sur 5-10 ans (10-20%/an)",
-            "- Résultat fiscal souvent nul ou déficitaire = 0 impôt sur les loyers",
+            "- Résultat fiscal souvent nul = 0 impôt sur les loyers",
+            "- L'amortissement ne peut pas créer de déficit : l'excédent est reporté (art. 39 C II CGI)",
+            "",
+            "### À la revente — depuis la LF 2025",
+            "- Les amortissements déduits sont **retranchés du prix d'acquisition** pour le calcul de la",
+            "  plus-value immobilière : l'économie d'impôt annuelle devient un différé, non un gain définitif",
+            "- Exclusion : logements en résidence services (étudiante, senior, EHPAD)",
+            "- Les abattements pour durée de détention restent acquis (exonération IR 22 ans, PS 30 ans)",
         ]
 
     elif type_loc == "meublee_lmp":
@@ -4001,12 +4234,12 @@ def tool_info_immobilier(args: Dict) -> str:
         lines += [
             "### Location Saisonnière / Airbnb",
             "",
-            "**Meublé de tourisme non classé** — depuis LF 2024",
-            "- Abattement **30%** (au lieu de 50% avant 2024), seuil 15 000€/an de recettes",
+            "**Meublé de tourisme non classé**",
+            "- Abattement **30%** (au lieu de 50% auparavant), seuil 15 000€/an de recettes",
             "- Au-delà de 15 000€ : régime réel obligatoire",
             "",
             "**Meublé de tourisme classé**",
-            f"- Abattement **71%** si recettes < 188 700€/an (régime micro-BIC)",
+            "- Abattement **50%** si recettes < 77 700€/an (LF 2025 : auparavant 71% / 188 700€)",
             "",
             "### Attention",
             "- Déclaration obligatoire en mairie",
@@ -4027,11 +4260,14 @@ def tool_info_immobilier(args: Dict) -> str:
 
 def tool_checker_eligibilite(args: Dict) -> str:
     rfr = float(args["revenu_fiscal_reference"])
-    nb_parts = float(args.get("nb_parts", 1))
     situation = args["situation_famille"]
     nb_enfants = int(args.get("nb_enfants", 0))
     age = args.get("age")
 
+    parts_calculees = calculer_parts(situation, nb_enfants)
+    nb_parts_declare = args.get("nb_parts")
+    nb_parts = (Parts(max(0.5, float(nb_parts_declare)), parts_calculees.parts_base, parts_calculees.foyer)
+                if nb_parts_declare else parts_calculees)
     rfr_par_part = rfr / nb_parts
 
     lines = [
@@ -4044,9 +4280,9 @@ def tool_checker_eligibilite(args: Dict) -> str:
     ]
 
     # LEP — seuils 2026 (source : service-public.fr)
-    seuil_lep = {1: 23_028, 2: 35_326, 3: 47_624, 4: 59_922}.get(int(nb_parts), 23_028 + (int(nb_parts)-1)*12_298)
+    seuil_lep = plafond_lep(nb_parts)
     if rfr <= seuil_lep:
-        lines.append(f"✅ **LEP** : Vous êtes éligible ! Ouvrez un Livret d'Épargne Populaire (2,5%, plafond 10 000€)")
+        lines.append(f"✅ **LEP** : Vous êtes éligible ! Ouvrez un Livret d'Épargne Populaire ({pct_fr(TAUX_LEP)}, plafond 10 000€)")
     else:
         lines.append(f"❌ **LEP** : Non éligible (RFR {rfr:,.0f}€ > seuil {seuil_lep:,.0f}€)")
 
@@ -4098,25 +4334,69 @@ def tool_checker_eligibilite(args: Dict) -> str:
     return "\n".join(lines)
 
 
-def _get_mpr_categorie(rfr: float, nb_parts: float) -> str:
-    """Détermine la catégorie MaPrimeRénov' selon le RFR et les parts."""
-    # Interpolation pour les parts non entières
-    np_int = min(5, max(1, round(nb_parts * 2) / 2))
-    seuils = MPR_SEUILS_2025.get(np_int, MPR_SEUILS_2025[1])
+def _personnes_depuis_parts(nb_parts: float) -> int:
+    """Convertit un nombre de parts fiscales en nombre de personnes composant le ménage.
+
+    Les barèmes de l'Anah raisonnent en personnes, l'avis d'imposition en parts. Aucun texte
+    ne donne de table de correspondance : on inverse le barème des parts de l'article 194 CGI,
+    tel que l'implémente calculer_parts(), en retenant la composition de ménage la plus petite
+    dont le nombre de parts est le plus proche de celui fourni.
+    """
+    nb_parts = max(0.5, float(nb_parts))
+    meilleur_ecart = None
+    meilleur_nb = 1
+    for situation, adultes in (("celibataire", 1), ("marie", 2)):
+        for enfants in range(0, 13):
+            ecart = abs(float(calculer_parts(situation, enfants)) - nb_parts)
+            personnes = adultes + enfants
+            if meilleur_ecart is None or ecart < meilleur_ecart - 1e-9 \
+                    or (abs(ecart - meilleur_ecart) < 1e-9 and personnes < meilleur_nb):
+                meilleur_ecart = ecart
+                meilleur_nb = personnes
+    return meilleur_nb
+
+
+def mpr_plafonds(nb_personnes: int, ile_de_france: bool = False) -> tuple:
+    """Plafonds de RFR (très modestes, modestes, intermédiaires) selon la taille du ménage."""
+    zone = "idf" if ile_de_france else "hors_idf"
+    nb_personnes = max(1, int(nb_personnes))
+    table = MPR_PLAFONDS[zone]
+    if nb_personnes in table:
+        return table[nb_personnes]
+    supplement = nb_personnes - 5
+    base = table[5]
+    increment = MPR_INCREMENT_PAR_PERSONNE[zone]
+    return tuple(base[i] + supplement * increment[i] for i in range(3))
+
+
+def _get_mpr_categorie(rfr: float, nb_personnes: int, ile_de_france: bool = False) -> str:
+    """Détermine la catégorie MaPrimeRénov' selon le RFR et la composition du ménage."""
+    seuils = mpr_plafonds(nb_personnes, ile_de_france)
     if rfr <= seuils[0]:
         return "bleu"
     elif rfr <= seuils[1]:
         return "jaune"
     elif rfr <= seuils[2]:
         return "violet"
-    else:
-        return "rose"
+    return "rose"
+
+
+def mpr_aide_geste(travaux_key: str, categorie: str, quantite: float = 1.0) -> float:
+    """Montant forfaitaire MaPrimeRénov' pour un geste, selon la catégorie de revenus."""
+    travaux = MAPRIMERENOV["travaux"].get(travaux_key)
+    rang = MAPRIMERENOV["categories"].get(categorie, {}).get("rang")
+    if not travaux or rang is None:
+        return 0.0
+    return travaux["forfaits"][rang] * max(0.0, quantite)
 
 
 def tool_analyser_declaration(args: Dict) -> str:
     situation = args.get("situation_famille", "celibataire")
     nb_enfants = int(args.get("nb_enfants", 0))
-    nb_parts = float(args.get("nb_parts", calculer_parts(situation, nb_enfants)))
+    parts_calculees = calculer_parts(situation, nb_enfants)
+    nb_parts_declare = args.get("nb_parts")
+    nb_parts = (Parts(float(nb_parts_declare), parts_calculees.parts_base, parts_calculees.foyer)
+                if nb_parts_declare else parts_calculees)
 
     # Revenus déclarés
     sal1 = float(args.get("case_1AJ", 0))
@@ -4132,6 +4412,7 @@ def tool_analyser_declaration(args: Dict) -> str:
     domicile = float(args.get("case_7DF", 0))
     dons_75 = float(args.get("case_7UD", 0))
     dons_66 = float(args.get("case_7UF", 0))
+    depenses_energie = float(args.get("case_7WF", 0))
     rfr = float(args.get("revenu_fiscal_reference", (sal1 + sal2) * 0.9))
 
     total_salaires = sal1 + sal2
@@ -4146,7 +4427,7 @@ def tool_analyser_declaration(args: Dict) -> str:
     if frais1 or frais2:
         lines.append(f"- Frais réels : {frais1 + frais2:,.0f}€ (option activée)")
     else:
-        abatt = min(total_salaires * 0.10, 14_426)
+        abatt = abattement_frais_pro(total_salaires)
         lines.append(f"- Abattement 10% automatique : {abatt:,.0f}€")
     if rev_foncier:
         lines.append(f"- Revenus fonciers nets : {rev_foncier:,.0f}€")
@@ -4161,6 +4442,11 @@ def tool_analyser_declaration(args: Dict) -> str:
     if dons_75 or dons_66:
         red = dons_75 * 0.75 + dons_66 * 0.66
         lines.append(f"- Dons : {dons_75+dons_66:,.0f}€ → réduction {red:,.0f}€")
+    if depenses_energie:
+        lines.append(
+            f"- Dépenses transition énergétique (7WF) : {depenses_energie:,.0f}€ → "
+            "aucun crédit d'impôt depuis 2021, l'aide passe par MaPrimeRénov' (subvention directe)"
+        )
 
     lines += ["", "---", "", "### Alertes et optimisations identifiées", ""]
 
@@ -4183,7 +4469,7 @@ def tool_analyser_declaration(args: Dict) -> str:
         )
 
     # PER
-    plafond_per_est = min(total_salaires * 0.10, PLAFOND_PER_MAX_2025)
+    plafond_per_est = max(min(total_salaires * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
     if total_per < plafond_per_est * 0.5:
         pot = plafond_per_est - total_per
         conseils.append(
@@ -4231,11 +4517,11 @@ def tool_analyser_declaration(args: Dict) -> str:
 
     # RFR et LEP — seuil 2026
     if rfr > 0:
-        seuil_lep = 23_028
+        seuil_lep = plafond_lep(nb_parts)
         if rfr <= seuil_lep:
             conseils.append(
                 f"✅ **LEP éligible** : votre RFR ({rfr:,.0f}€) vous permet d'ouvrir un "
-                "Livret d'Épargne Populaire (2,5%, exonéré, plafond 10 000€)."
+                f"Livret d'Épargne Populaire ({pct_fr(TAUX_LEP)}, exonéré, plafond 10 000€)."
             )
 
     for a in alertes:
@@ -4277,6 +4563,8 @@ def tool_diagnostic_complet(args: Dict) -> str:
     travaux_envisages = args.get("travaux_envisages", [])
     budget_travaux = float(args.get("budget_travaux", 0))
     annee_construction = args.get("annee_construction_bien")
+    travaux_recents = bool(args.get("a_fait_travaux_recents", False))
+    invest_pme = bool(args.get("investissement_pme_envisage", False))
     a_pea = args.get("a_pea", False)
     a_av = args.get("a_assurance_vie", False)
     a_per = args.get("a_per", False)
@@ -4297,7 +4585,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
     # Calculs de base
     nb_parts = calculer_parts(situation, nb_enfants)
     revenu_total = salaire + rev_fonciers + rev_cap + rev_indep
-    abattement = min(salaire * 0.10, 14_426) if type_emploi != "independant" else 0
+    abattement = abattement_frais_pro(salaire) if type_emploi != "independant" else 0
     rni_estime = max(0, revenu_total - abattement - versements_per)
     res_ir = calculer_ir(rni_estime, nb_parts)
     tmi = res_ir["taux_marginal"]
@@ -4309,7 +4597,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
     # Catégorie MPR si propriétaire
     mpr_cat = None
     if "proprietaire" in statut_logement:
-        mpr_cat = _get_mpr_categorie(rfr_estime, nb_parts)
+        mpr_cat = _get_mpr_categorie(rfr_estime, _personnes_depuis_parts(nb_parts))
 
     lines = [
         "# Diagnostic Fiscal Complet — Rapport Personnalisé",
@@ -4337,7 +4625,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
 
     # ── 1. PER ──────────────────────────────────────────────────────────────
     if tmi >= 11:
-        plafond_per = min(salaire * 0.10, PLAFOND_PER_MAX_2025)
+        plafond_per = max(min(salaire * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
         restant_per = max(0, plafond_per - versements_per)
         if restant_per > 500:
             economie_per = min(restant_per, 5000) * tmi / 100
@@ -4355,44 +4643,45 @@ def tool_diagnostic_complet(args: Dict) -> str:
     # ── 2. MaPrimeRénov' ────────────────────────────────────────────────────
     if "proprietaire" in statut_logement and mpr_cat:
         cat_info = MAPRIMERENOV["categories"][mpr_cat]
+        eligible_geste = cat_info["rang"] is not None
         aide_estimee = 0
         travaux_str = []
 
-        if travaux_envisages:
+        if travaux_envisages and eligible_geste:
             for trav in travaux_envisages:
                 t_info = MAPRIMERENOV["travaux"].get(trav, {})
                 if t_info:
-                    plafond = t_info.get("plafond_aide", t_info.get("plafond_aide_m2", 0))
-                    taux_mpr = cat_info.get(f"taux_{trav.split('_')[0]}", cat_info.get("taux_isolation", 0.20))
-                    if isinstance(plafond, (int, float)) and plafond > 0:
-                        aide_t = plafond * taux_mpr
-                        aide_estimee += aide_t
-                        travaux_str.append(f"  - {t_info['nom']} : aide ~{aide_t:,.0f}€")
-        elif budget_travaux > 0:
-            aide_estimee = budget_travaux * cat_info["taux_isolation"] * 0.5  # estimation grossière
-
-        if dpe in ["F", "G"]:
-            aide_estimee += MAPRIMERENOV["bonus_sortie_passoire"]
-            travaux_str.append(f"  - Bonus sortie passoire thermique (F/G) : +{MAPRIMERENOV['bonus_sortie_passoire']:,}€")
+                    aide_t = mpr_aide_geste(trav, mpr_cat)
+                    aide_estimee += aide_t
+                    suffixe = {"m2": "/m²", "equipement": "/équipement"}.get(t_info["unite"], "")
+                    travaux_str.append(f"  - {t_info['nom']} : {aide_t:,.0f}€{suffixe}")
 
         if aide_estimee > 0 or "proprietaire" in statut_logement:
             lines += [
                 f"### {prio}. MaPrimeRénov' — Travaux de rénovation énergétique 🏠",
                 f"- **Votre catégorie** : {cat_info['label']}",
-                f"- Taux pour isolation : {cat_info['taux_isolation']*100:.0f}%",
-                f"- Taux pour pompe à chaleur : {cat_info['taux_pompe_chaleur']*100:.0f}%",
             ]
-            if travaux_str:
-                lines.append("- **Aides estimées pour vos travaux** :")
+            if not eligible_geste:
+                lines += [
+                    "- Le parcours par geste n'est plus ouvert aux ménages aux revenus supérieurs.",
+                    "- Reste accessible : la **rénovation d'ampleur** (10% du montant HT, gain de 2 classes minimum).",
+                ]
+            elif travaux_str:
+                lines.append("- **Forfaits applicables à vos travaux** :")
                 lines += travaux_str
-                lines.append(f"- **Total aide estimée : ~{aide_estimee:,.0f}€**")
+                lines.append(f"- **Total forfaits : ~{aide_estimee:,.0f}€** (hors quantités pour l'isolation et les fenêtres)")
             else:
                 lines += [
-                    "- Vous n'avez pas renseigné de travaux. Travaux éligibles : isolation, PAC, chaudière bois...",
+                    "- Vous n'avez pas renseigné de travaux. Gestes éligibles : PAC, poêle, isolation de toiture, fenêtres, VMC.",
                     "- Utilisez `guide_maprimerenov` pour simuler vos travaux précis",
                 ]
             if dpe in ["E", "F", "G", "inconnu"] or annee_construction and annee_construction < 1990:
                 lines.append("- ⚡ Votre logement semble potentiellement éligible à des travaux prioritaires")
+            if travaux_recents:
+                lines.append(
+                    "- ⚠️ Travaux déjà réalisés récemment : vérifiez qu'ils ont bien été déclarés "
+                    "et que les factures RGE sont conservées (contrôle possible pendant 3 ans)"
+                )
             lines += [
                 "- **Action** : Simuler sur maprimerenov.gouv.fr + faire un audit énergétique",
                 "- Conditions : résidence principale > 15 ans, entreprise RGE",
@@ -4439,9 +4728,9 @@ def tool_diagnostic_complet(args: Dict) -> str:
 
     # ── 5. Frais réels ──────────────────────────────────────────────────────
     if type_emploi in ["salarie", "fonctionnaire", "mixte"] and (dist_travail > 30 or teletravail >= 3):
-        abatt_auto = min(salaire * 0.10, 14_426)
+        abatt_auto = abattement_frais_pro(salaire)
         km_annuels = dist_travail * 2 * 220 if dist_travail > 0 else 0
-        frais_km = km_annuels * 0.381  # 5CV approximatif
+        frais_km = frais_kilometriques(km_annuels, 5)
         if frais_km > abatt_auto or teletravail >= 3:
             lines += [
                 f"### {prio}. Frais Réels Professionnels",
@@ -4477,8 +4766,8 @@ def tool_diagnostic_complet(args: Dict) -> str:
         epargne_conseils.append("- Ouvrir un **PEA** pour vos actions (exonération IR après 5 ans)")
     if not a_av:
         epargne_conseils.append("- Ouvrir une **assurance-vie** pour préparer transmission et épargne longue")
-    if not a_livret_plein and rfr_estime < 23_028:
-        epargne_conseils.append("- **LEP** : 2,5% défiscalisé — à maximiser en priorité !")
+    if not a_livret_plein and rfr_estime < plafond_lep(nb_parts):
+        epargne_conseils.append(f"- **LEP** : {pct_fr(TAUX_LEP)} défiscalisé — à maximiser en priorité !")
 
     if epargne_conseils:
         lines += [
@@ -4527,10 +4816,12 @@ def tool_diagnostic_complet(args: Dict) -> str:
         f"|--------|-----------------|",
     ]
     if tmi >= 11:
-        plafond_per2 = min(salaire * 0.10, PLAFOND_PER_MAX_2025)
+        plafond_per2 = max(min(salaire * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
         lines.append(f"| PER (5 000€ versés) | ~{5000*tmi/100:,.0f}€ d'impôt |")
     if "proprietaire" in statut_logement and travaux_envisages:
         lines.append(f"| MaPrimeRénov' | Subvention non fiscale (aide directe) |")
+    if invest_pme:
+        lines.append("| Souscription au capital de PME (IR-PME 18%) | ~1 800€ pour 10 000€ investis |")
     lines += [
         "| Emploi à domicile (200€/mois) | ~1 200€ crédit d'impôt |",
         "| Dons 200€ (75%) | ~150€ réduction d'impôt |",
@@ -4547,6 +4838,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
         "- Simulation PER précise → `calculer_economie_per`",
         "- Vos frais professionnels → `guide_frais_reels`",
         "- Comparer deux stratégies → `comparer_scenarios`",
+    ] + (["- Investissement au capital de PME → `guide_defiscalisation_solidaire`"] if invest_pme else []) + [
         "- Calcul prélèvement à la source → `calculer_prelevement_source`",
         "- Si patrimoine immobilier > 1,3M€ → `calculer_ifi`",
         "- Si indépendant / TNS → `optimiser_tns`",
@@ -4662,6 +4954,7 @@ def tool_optimiser_tns(args: Dict) -> str:
         "vente_marchandises": "micro_be",
         "prestations_services_bic": "micro_bic_services",
         "prestations_liberales_bnc": "micro_bnc",
+        "prestations_liberales_cipav": "micro_bnc_cipav",
     }.get(type_act, "micro_bnc"), {})
 
     micro_eligible = regime_micro and ca <= regime_micro.get("seuil_ca", 0)
@@ -4681,7 +4974,7 @@ def tool_optimiser_tns(args: Dict) -> str:
     if micro_eligible:
         abatt = regime_micro["abattement"]
         benefice_micro = ca * (1 - abatt)
-        cotis_micro = ca * regime_micro.get("taux_cotisations_sociales", 0.214)
+        cotis_micro = ca * regime_micro.get("taux_cotisations_sociales", COTISATIONS_AE_SERVICES_BIC)
         rni_micro = max(0, benefice_micro - cotis_micro)
         ir_micro = calculer_ir(rni_micro, nb_parts)["impot_net"]
 
@@ -4716,7 +5009,7 @@ def tool_optimiser_tns(args: Dict) -> str:
 
     # ── PER TNS ─────────────────────────────────────────────────────────────
     benefice_ref = max(0, ca - charges - cotis_actuelles) if not micro_eligible else ca * (1 - regime_micro.get("abattement", 0.34))
-    plafond_per = min(benefice_ref * 0.10, PLAFOND_PER_MAX_2025)
+    plafond_per = max(min(benefice_ref * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
     plafond_per = max(plafond_per, PLAFOND_PER_MIN_2025)
     tmi = calculer_ir(benefice_ref, nb_parts)["taux_marginal"]
 
@@ -4731,9 +5024,8 @@ def tool_optimiser_tns(args: Dict) -> str:
 
     # ── Madelin ─────────────────────────────────────────────────────────────
     lines += ["### 3. Contrats Madelin (prévoyance & retraite)", ""]
-    pass_2025 = 47_100
     for key, mad in PLAFOND_MADELIN_2025.items():
-        plafond_mad = min(benefice_ref * mad["taux"], mad["max_pass"] * pass_2025 * mad["taux"])
+        plafond_mad = min(benefice_ref * mad["taux"], mad["max_pass"] * PASS_ANNEE_COURANTE * mad["taux"])
         lines.append(f"- **{mad['description']}** : plafond ~{plafond_mad:,.0f}€/an (déductible du bénéfice)")
     if not a_madelin:
         lines.append("\n💡 Vous n'avez pas de contrats Madelin — à envisager pour optimiser prévoyance + déduction fiscale.")
@@ -5223,54 +5515,46 @@ def tool_simuler_scpi(args: Dict) -> str:
     # Pleine propriété — calcul fiscal complet
     total_foncier = revenus_bruts_scpi + autres_fonciers
 
-    # Régime micro-foncier ou réel
-    if total_foncier <= SCPI_INFO["seuil_micro_foncier"]:
-        base_micro = revenus_bruts_scpi * (1 - SCPI_INFO["abattement_micro_foncier"])
-        ir_micro = base_micro * tmi_base / 100
-        ps_micro = base_micro * SCPI_INFO["ps_taux"]
-        total_fisc_micro = ir_micro + ps_micro
+    micro_eligible = total_foncier <= SCPI_INFO["seuil_micro_foncier"]
+    abattement = SCPI_INFO["abattement_micro_foncier"] if micro_eligible else 0.0
+    base_imposable = revenus_bruts_scpi * (1 - abattement)
 
-        rni_avec_scpi = rni_hors_scpi + base_micro
-        ir_total = calculer_ir(rni_avec_scpi, nb_parts)["impot_net"]
-        ir_base = calculer_ir(rni_hors_scpi, nb_parts)["impot_net"]
-        ir_reel_scpi = ir_total - ir_base
-        ps_reel = revenus_bruts_scpi * SCPI_INFO["ps_taux"]  # PS sur revenus bruts (pas d'abattement micro pour PS... en réalité si)
-        total_fisc_reel = ir_reel_scpi + ps_reel
+    ir_avec = calculer_ir(rni_hors_scpi + base_imposable, nb_parts)["impot_net"]
+    ir_sans = calculer_ir(rni_hors_scpi, nb_parts)["impot_net"]
+    ir_scpi = ir_avec - ir_sans
+    ps_scpi = base_imposable * SCPI_INFO["ps_taux"]
+    total_fisc = ir_scpi + ps_scpi
+    revenus_nets = revenus_bruts_scpi - total_fisc
+    rendement_net = revenus_nets / montant * 100 if montant > 0 else 0.0
 
-        rendement_net_micro = (revenus_bruts_scpi - total_fisc_micro) / montant * 100
-        rendement_net_reel = (revenus_bruts_scpi - total_fisc_reel) / montant * 100
-
-        lines += [
-            "### Fiscalité en Pleine Propriété",
-            "",
-            f"| | Micro-foncier (30% abatt.) | Réel (IR progressif) |",
-            f"|--|--------------------------|---------------------|",
-            f"| Revenus bruts SCPI | {revenus_bruts_scpi:,.0f}€ | {revenus_bruts_scpi:,.0f}€ |",
-            f"| Abattement / charges | -{revenus_bruts_scpi*0.30:,.0f}€ | variable |",
-            f"| Base imposable | {base_micro:,.0f}€ | {revenus_bruts_scpi:,.0f}€ |",
-            f"| IR ({tmi_base:.0f}% TMI) | {ir_micro:,.0f}€ | {ir_reel_scpi:,.0f}€ |",
-            f"| Prélèvements sociaux 17,2% | {ps_micro:,.0f}€ | {ps_reel:,.0f}€ |",
-            f"| **Total fiscalité** | **{total_fisc_micro:,.0f}€** | **{total_fisc_reel:,.0f}€** |",
-            f"| **Revenus nets** | **{revenus_bruts_scpi - total_fisc_micro:,.0f}€** | **{revenus_bruts_scpi - total_fisc_reel:,.0f}€** |",
-            f"| **Rendement net fiscal** | **{rendement_net_micro:.2f}%** | **{rendement_net_reel:.2f}%** |",
-            "",
-        ]
+    if micro_eligible:
+        regime = f"Micro-foncier (abattement {abattement*100:.0f}%)"
+        ligne_abattement = f"| Abattement forfaitaire | -{revenus_bruts_scpi * abattement:,.0f}€ |"
     else:
-        rni_avec_scpi = rni_hors_scpi + revenus_bruts_scpi
-        ir_total = calculer_ir(rni_avec_scpi, nb_parts)["impot_net"]
-        ir_base = calculer_ir(rni_hors_scpi, nb_parts)["impot_net"]
-        ir_scpi = ir_total - ir_base
-        ps_scpi = revenus_bruts_scpi * SCPI_INFO["ps_taux"]
-        total_fisc = ir_scpi + ps_scpi
-        rendement_net = (revenus_bruts_scpi - total_fisc) / montant * 100
+        regime = f"Régime réel obligatoire (revenus fonciers > {SCPI_INFO['seuil_micro_foncier']:,}€)"
+        ligne_abattement = "| Charges déductibles réelles | à renseigner dans la déclaration 2044 |"
 
+    lines += [
+        "### Fiscalité en Pleine Propriété",
+        "",
+        f"**Régime applicable** : {regime}",
+        "",
+        f"| Élément | Montant |",
+        f"|---------|---------|",
+        f"| Revenus bruts SCPI | {revenus_bruts_scpi:,.0f}€ |",
+        ligne_abattement,
+        f"| Base imposable | {base_imposable:,.0f}€ |",
+        f"| IR (TMI {tmi_base:.0f}%, calcul au barème) | {ir_scpi:,.0f}€ |",
+        f"| Prélèvements sociaux {SCPI_INFO['ps_taux']*100:.1f}% | {ps_scpi:,.0f}€ |",
+        f"| **Total fiscalité** | **{total_fisc:,.0f}€** |",
+        f"| **Revenus nets** | **{revenus_nets:,.0f}€** |",
+        f"| **Rendement net fiscal** | **{rendement_net:.2f}%** |",
+        "",
+    ]
+    if not micro_eligible:
         lines += [
-            "### Fiscalité en Pleine Propriété (régime réel obligatoire > 15 000€)",
-            f"- IR sur revenus SCPI : {ir_scpi:,.0f}€",
-            f"- Prélèvements sociaux 17,2% : {ps_scpi:,.0f}€",
-            f"- **Total fiscalité : {total_fisc:,.0f}€**",
-            f"- Revenus nets après impôt : **{revenus_bruts_scpi - total_fisc:,.0f}€**",
-            f"- **Rendement net fiscal : {rendement_net:.2f}%**",
+            "Au régime réel, les charges (intérêts d'emprunt, frais de gestion, travaux) viennent",
+            "en déduction des revenus bruts : la base imposable réelle sera inférieure à celle affichée.",
             "",
         ]
 
@@ -5787,129 +6071,169 @@ def tool_guide_frontaliers(args: Dict) -> str:
 def tool_guide_maprimerenov(args: Dict) -> str:
     rfr = float(args["revenu_fiscal_reference"])
     nb_parts = float(args.get("nb_parts", 1))
+    nb_personnes = int(args.get("nb_personnes", 0)) or _personnes_depuis_parts(nb_parts)
+    ile_de_france = bool(args.get("ile_de_france", False))
     travaux = args.get("travaux_envisages", [])
+    surface_isolee_m2 = float(args.get("surface_isolee_m2", 0))
+    nb_fenetres = int(args.get("nb_fenetres", 0))
     budget = float(args.get("budget_total", 0))
     dpe = args.get("dpe_actuel", "inconnu")
     dpe_cible = args.get("dpe_cible", "inconnu")
 
-    categorie = _get_mpr_categorie(rfr, nb_parts)
+    categorie = _get_mpr_categorie(rfr, nb_personnes, ile_de_france)
     cat_info = MAPRIMERENOV["categories"][categorie]
-
-    # Seuils pour info
-    np_int = min(5, max(1, round(nb_parts * 2) / 2))
-    seuils = MPR_SEUILS_2025.get(np_int, MPR_SEUILS_2025[1])
+    rang = cat_info["rang"]
+    seuils = mpr_plafonds(nb_personnes, ile_de_france)
+    zone_label = "Île-de-France" if ile_de_france else "hors Île-de-France"
+    ampleur = MAPRIMERENOV["ampleur"]
+    rang_ampleur = rang if rang is not None else 3
 
     lines = [
-        "## Guide MaPrimeRénov' 2025",
+        f"## Guide MaPrimeRénov' {ANNEE_DECLARATION}",
         "",
-        f"### Votre profil",
-        f"- RFR : {rfr:,.0f}€ pour {nb_parts} parts fiscales",
-        f"- **Catégorie : {cat_info['label']} ({categorie.upper()})**",
+        "### Votre profil",
+        f"- RFR : {rfr:,.0f}€ — ménage de {nb_personnes} personne(s) — {zone_label}",
+        f"- **Catégorie : {cat_info['label']}**",
         "",
-        "#### Taux d'aide applicables à votre catégorie :",
-        f"| Type de travaux | Taux |",
-        f"|-----------------|------|",
-        f"| Isolation (combles, murs, plancher) | {cat_info['taux_isolation']*100:.0f}% |",
-        f"| Pompe à chaleur | {cat_info['taux_pompe_chaleur']*100:.0f}% |",
-        f"| Chaudière à granulés/bois | {cat_info['taux_chaudiere_bois']*100:.0f}% |",
-        f"| Fenêtres / double vitrage | {cat_info['taux_fenetres']*100:.0f}%" + (" (non éligible)" if cat_info['taux_fenetres'] == 0 else "") + " |",
+        f"### Plafonds de ressources au 1er janvier {ANNEE_DECLARATION} ({zone_label})",
+        f"(ménage de {nb_personnes} personne(s))",
+        "",
+        "| Catégorie | Plafond RFR | Votre situation |",
+        "|-----------|-------------|-----------------|",
+        f"| 🔵 Très modestes | ≤ {seuils[0]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'bleu' else ''} |",
+        f"| 🟡 Modestes | ≤ {seuils[1]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'jaune' else ''} |",
+        f"| 🟣 Intermédiaires | ≤ {seuils[2]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'violet' else ''} |",
+        f"| 🌸 Supérieurs | > {seuils[2]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'rose' else ''} |",
+        "",
+        "Les plafonds de l'Anah dépendent du **nombre de personnes composant le ménage**, pas du nombre",
+        "de parts fiscales, et diffèrent entre l'Île-de-France et le reste du territoire.",
         "",
     ]
 
-    # Tableau des seuils
+    if rang is None:
+        lines += [
+            "### Parcours par geste : non éligible",
+            "",
+            "Depuis 2026, les ménages aux revenus supérieurs ne bénéficient d'aucun forfait au titre du",
+            "parcours par geste. Seule la **rénovation d'ampleur** reste ouverte.",
+            "",
+        ]
+    else:
+        lines += [
+            "### Forfaits du parcours par geste applicables à votre catégorie",
+            "",
+            "| Geste de travaux | Forfait | Plafond de dépense éligible |",
+            "|------------------|---------|------------------------------|",
+        ]
+        for cle, t in MAPRIMERENOV["travaux"].items():
+            suffixe = {"m2": "/m²", "equipement": "/équipement"}.get(t["unite"], "")
+            lines.append(
+                f"| {t['nom']} | {t['forfaits'][rang]:,}€{suffixe} | {t['plafond_depense']:,}€{suffixe} |"
+            )
+        lines.append("")
+
+    retires = ", ".join(MAPRIMERENOV["travaux_retires"].values())
     lines += [
-        "### Seuils de revenus MaPrimeRénov' 2025",
-        f"(Pour {nb_parts} parts fiscales)",
-        f"| Catégorie | Plafond RFR | Votre situation |",
-        f"|-----------|-------------|-----------------|",
-        f"| 🔵 Bleu (très modestes) | ≤ {seuils[0]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie=='bleu' else ''} |",
-        f"| 🟡 Jaune (modestes) | ≤ {seuils[1]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie=='jaune' else ''} |",
-        f"| 🟣 Violet (intermédiaires) | ≤ {seuils[2]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie=='violet' else ''} |",
-        f"| 🌸 Rose (supérieurs) | > {seuils[2]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie=='rose' else ''} |",
+        f"> Ne relèvent plus du parcours par geste : {retires}.",
+        "> Ces travaux restent finançables via la rénovation d'ampleur.",
         "",
     ]
 
-    # Simulation travaux
-    if travaux:
+    if travaux and rang is not None:
         lines += [
             "### Simulation de vos travaux",
             "",
-            f"| Travaux | Coût moyen | Plafond aide | Aide estimée ({categorie}) |",
-            f"|---------|------------|--------------|--------------------------|",
+            "| Geste | Quantité | Forfait unitaire | Aide |",
+            "|-------|----------|------------------|------|",
         ]
-        total_cout = 0
-        total_aide = 0
-        for trav_key in travaux:
-            t = MAPRIMERENOV["travaux"].get(trav_key)
+        total_aide = 0.0
+        for cle in travaux:
+            t = MAPRIMERENOV["travaux"].get(cle)
             if not t:
                 continue
-            cout = t.get("cout_moyen", t.get("cout_moyen_m2", 0))
-            plafond = t.get("plafond_aide", t.get("plafond_aide_m2", 0))
-            taux = cat_info.get(f"taux_{trav_key.split('_')[0]}", cat_info["taux_isolation"])
-            if trav_key == "fenetres" and categorie == "rose":
-                aide = 0
-                note = "(non éligible catégorie Rose)"
+            if t["unite"] == "m2":
+                quantite = surface_isolee_m2 if surface_isolee_m2 > 0 else 1
+                q_label = f"{quantite:,.0f} m²" if surface_isolee_m2 > 0 else "1 m² (surface non renseignée)"
+            elif t["unite"] == "equipement":
+                quantite = nb_fenetres if nb_fenetres > 0 else 1
+                q_label = f"{quantite} équipement(s)" if nb_fenetres > 0 else "1 équipement (nombre non renseigné)"
             else:
-                aide = plafond * taux
-                note = ""
-            total_cout += cout
+                quantite = 1
+                q_label = "forfait"
+            aide = mpr_aide_geste(cle, categorie, quantite)
             total_aide += aide
-            cout_str = f"~{cout:,}€" if isinstance(cout, int) else f"~{cout}€/m²"
-            plafond_str = f"{plafond:,}€" if isinstance(plafond, int) else f"{plafond}€/m²"
-            lines.append(f"| {t['nom']} | {cout_str} | {plafond_str} | **{aide:,.0f}€** {note} |")
-
-        # Bonus passoire thermique
-        if dpe in ["F", "G"]:
-            lines.append(f"| Bonus sortie passoire (F→E ou mieux) | — | — | **+{MAPRIMERENOV['bonus_sortie_passoire']:,}€** |")
-            total_aide += MAPRIMERENOV["bonus_sortie_passoire"]
-
+            lines.append(f"| {t['nom']} | {q_label} | {t['forfaits'][rang]:,}€ | **{aide:,.0f}€** |")
+        ecretement = MAPRIMERENOV["ecretement_geste_mpr_cee"][rang]
         lines += [
             "",
-            f"**Total aide estimée : {total_aide:,.0f}€**",
-            f"*(sur un investissement d'environ {total_cout:,.0f}€)*",
+            f"**Total des forfaits : {total_aide:,.0f}€**",
+            "",
+            f"Écrêtement : le cumul MaPrimeRénov' + CEE ne peut dépasser **{ecretement*100:.0f}%** de la dépense",
+            "éligible (100% en ajoutant les aides locales).",
             "",
         ]
-
     elif budget > 0:
-        aide_estim = budget * cat_info["taux_isolation"]
+        taux_ampleur = ampleur["taux"][rang_ampleur]
+        plafond_ampleur = ampleur["plafond_gain_2_classes"]
+        base = min(budget, plafond_ampleur)
         lines += [
-            f"### Estimation globale",
+            "### Estimation en rénovation d'ampleur",
             f"- Budget travaux : {budget:,.0f}€",
-            f"- Aide estimée (taux isolation {cat_info['taux_isolation']*100:.0f}%) : ~{aide_estim:,.0f}€",
+            f"- Base retenue : {base:,.0f}€ (plafond {plafond_ampleur:,}€ pour un gain de 2 classes)",
+            f"- Aide estimée à {taux_ampleur*100:.0f}% : **~{base * taux_ampleur:,.0f}€**",
             "",
         ]
 
-    # Conditions générales
+    lines += [
+        "### MaPrimeRénov' rénovation d'ampleur",
+        "",
+        "| Élément | Votre catégorie |",
+        "|---------|-----------------|",
+        f"| Taux d'aide | {ampleur['taux'][rang_ampleur]*100:.0f}% du montant HT |",
+        f"| Plafond gain de 2 classes | {ampleur['plafond_gain_2_classes']:,}€ HT |",
+        f"| Plafond gain de 3 classes ou plus | {ampleur['plafond_gain_3_classes']:,}€ HT |",
+        f"| Écrêtement toutes aides | {ampleur['ecretement'][rang_ampleur]*100:.0f}% du montant TTC |",
+        f"| Mon Accompagnateur Rénov' pris en charge à | {ampleur['accompagnateur_prise_en_charge'][rang_ampleur]*100:.0f}% (plafond {ampleur['accompagnateur_plafond']:,}€ TTC) |",
+        "",
+        "Conditions : gain de **2 classes énergétiques minimum**, au moins **deux gestes d'isolation**,",
+        "accompagnement obligatoire par Mon Accompagnateur Rénov'.",
+        "",
+        "> Depuis le 1er septembre 2026, l'aide rénovation d'ampleur n'est plus attribuée si un chauffage",
+        "> au gaz est conservé après les travaux.",
+        "",
+    ]
+
+    if dpe in ["F", "G"]:
+        lines += [
+            f"### Votre logement est classé {dpe}",
+            "La rénovation d'ampleur est le parcours conçu pour les passoires thermiques : elle vise",
+            f"la sortie du statut F/G{' vers la classe ' + dpe_cible if dpe_cible not in ('inconnu', '') else ''}.",
+            "",
+        ]
+
     lines += [
         "### Conditions générales d'éligibilité",
-        "1. **Logement** : résidence principale construite il y a > 15 ans",
-        "2. **Entreprise RGE** : obligatoirement réalisé par artisan certifié RGE (Reconnu Garant Environnement)",
-        "3. **Demande avant travaux** : la demande doit être faite sur maprimerenov.gouv.fr AVANT de signer le devis",
-        "4. **Propriétaire** : occupant ou bailleur (conditions différentes pour les bailleurs)",
-        "",
-        "### Parcours recommandés",
-        "- **Mono-geste** : un seul type de travaux (isolation OU PAC OU chaudière)",
-        "- **Parcours accompagné** : plusieurs travaux permettant un gain de 2 classes DPE minimum",
-        "  - Obligatoire si aide > 5 000€ sur 5 ans",
-        "  - Audit énergétique obligatoire (aide pour l'audit disponible)",
-        "  - Suivi par Mon Accompagnateur Rénov' (MAR)",
+        "1. **Logement** : résidence principale achevée depuis plus de 15 ans",
+        "2. **Entreprise RGE** : travaux réalisés par un artisan certifié RGE",
+        "3. **Demande avant travaux** : déposer le dossier sur maprimerenov.gouv.fr avant de signer le devis",
+        "4. **Propriétaire** : occupant ou bailleur (le bailleur doit louer dans l'année suivant le solde)",
         "",
         "### Cumuler avec d'autres aides",
         "- **Éco-PTZ** : prêt à taux zéro pour financer le reste à charge",
-        "- **Aides ANAH** : complémentaires pour ménages modestes",
-        "- **TVA réduite 5,5%** : sur travaux d'amélioration énergétique (au lieu de 10%)",
-        "- **Aides locales** : départements et régions ont souvent des aides supplémentaires",
-        "- **Certificats d'Économies d'Énergie (CEE)** : primes énergie des fournisseurs",
+        "- **CEE** : primes énergie des fournisseurs, dans la limite de l'écrêtement",
+        "- **TVA réduite 5,5%** sur les travaux d'amélioration énergétique",
+        "- **Aides locales** : départements, régions et intercommunalités",
         "",
         "### Liens essentiels",
         "- Simulateur officiel : **maprimerenov.gouv.fr**",
-        "- Annuaire RGE : **france-renov.gouv.fr**",
+        "- Annuaire RGE et barèmes : **france-renov.gouv.fr**",
         "- Accompagnateur Rénov' : **france-renov.gouv.fr/mon-accompagnateur-renov**",
         "",
-        "> ⚠️ Les montants sont indicatifs. Les aides réelles dépendent du plafond de ressources exact",
-        "> et des devis obtenus. Simulez toujours sur maprimerenov.gouv.fr avant d'engager des travaux.",
+        "> ⚠️ Montants indicatifs au 1er janvier 2026. Les aides réelles dépendent des devis obtenus",
+        "> et du plafond de dépense éligible. Simulez sur maprimerenov.gouv.fr avant d'engager les travaux.",
     ]
     return "\n".join(lines)
+
 
 
 # ─── Outils 2.3.0 ────────────────────────────────────────────────────────────
@@ -6254,11 +6578,8 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     # Constantes fiscales 2025/2026
-    PASS_2025 = 46_368  # Plafond Annuel de la Sécurité Sociale 2025
     ABATTEMENT_RETRAITE_MIN = 422      # Abattement 10% retraite — plancher par pensionné
     ABATTEMENT_RETRAITE_MAX = 4_321    # Abattement 10% retraite — plafond par pensionné
-    ABATTEMENT_SALAIRE_MIN = 495       # Abattement 10% salaires — plancher
-    ABATTEMENT_SALAIRE_MAX = 14_426    # Abattement 10% salaires — plafond
     ABATT_PERSONNES_AGEES_1 = 2_312    # RFR < 17 510 €
     ABATT_PERSONNES_AGEES_2 = 1_156    # RFR < 28 058 €
     SEUIL_RFR_PA_1 = 17_510
@@ -6273,8 +6594,7 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
 
     # ── CHÔMAGE (ARE) ─────────────────────────────────────────────────────────
     if type_revenu == "chomage":
-        abattement = min(montant * 0.10, ABATTEMENT_SALAIRE_MAX)
-        abattement = max(abattement, ABATTEMENT_SALAIRE_MIN)
+        abattement = abattement_frais_pro(montant)
         revenu_imposable = max(0, montant - abattement)
         lines += [
             "### Traitement fiscal des allocations chômage (ARE)",
@@ -6286,7 +6606,7 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
             f"| Élément | Montant |",
             f"|---------|---------|",
             f"| Allocations ARE brutes | {montant:,.0f}€ |",
-            f"| Abattement 10% (min {ABATTEMENT_SALAIRE_MIN:,}€ / max {ABATTEMENT_SALAIRE_MAX:,}€) | -{abattement:,.0f}€ |",
+            f"| Abattement 10% (min {ABATTEMENT_FRAIS_PRO_MIN:,}€ / max {ABATTEMENT_FRAIS_PRO_MAX:,}€) | -{abattement:,.0f}€ |",
             f"| **Revenu imposable ARE** | **{revenu_imposable:,.0f}€** |",
             "",
             "**À déclarer** : case 1AP/1BP de la déclaration 2042 (traitements, salaires, ARE).",
@@ -6384,7 +6704,7 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
 
     # ── INDEMNITÉ DE LICENCIEMENT ─────────────────────────────────────────────
     elif type_revenu == "indemnite_licenciement":
-        PASS_X6 = PASS_2025 * 6  # 278 208 €
+        PASS_X6 = PASS_ANNEE_COURANTE * 6
         indemnite = montant
 
         # Calcul du plafond d'exonération
@@ -6417,7 +6737,7 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
             "L'indemnité de licenciement est **exonérée dans la limite du plus élevé** des trois montants suivants :",
             f"1. **Deux fois la rémunération brute annuelle** de référence",
             f"2. **50% de l'indemnité** totale versée",
-            f"3. Plafonnée au maximum à **6 × PASS = {PASS_X6:,}€** (PASS 2025 = {PASS_2025:,}€)",
+            f"3. Plafonnée au maximum à **6 × PASS = {PASS_X6:,}€** (PASS {ANNEE_DECLARATION} = {PASS_ANNEE_COURANTE:,}€)",
             "",
             f"| Élément | Montant |",
             f"|---------|---------|",
@@ -6738,12 +7058,12 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
     montant = float(args.get("montant", 0))
     abondement = float(args.get("abondement_employeur", 0))
     tmi = float(args.get("tmi", 30))
+    annees_blocage = max(0, int(args.get("annees_blocage_restantes", 0)))
     moins_3ans = bool(args.get("moins_3ans_societe", False))
 
     # Constantes
-    PASS_2025 = 46_368
-    ABOND_MAX_PEE = PASS_2025 * 0.08        # 3,709.44€
-    ABOND_MAX_PERCO = PASS_2025 * 0.16      # 7,418.88€
+    ABOND_MAX_PEE = PASS_ANNEE_COURANTE * 0.08
+    ABOND_MAX_PERCO = PASS_ANNEE_COURANTE * 0.16
     CSG_CRDS = 9.7  # %
 
     lines = ["# Optimisation de l'épargne salariale", ""]
@@ -6793,8 +7113,12 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
         ]
 
     elif dispositif == "pee":
-        gains = montant * 0.05 * 5  # estimation 5%/an sur 5 ans
+        duree_restante = annees_blocage if annees_blocage > 0 else 5
+        gains = montant * 0.05 * duree_restante
         ps = gains * 0.172
+        if annees_blocage > 0:
+            lines.append(f"**Blocage restant déclaré** : {annees_blocage} an(s)")
+            lines.append("")
         lines += [
             "## Plan Épargne Entreprise (PEE)",
             "",
@@ -6806,7 +7130,7 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
             "",
             "### Fiscalité à la sortie",
             "- **Gains/intérêts** : exonérés d'IR (mais prélèvements sociaux 17.2%)",
-            f"- Estimation sur {montant:,.0f}€ à 5%/an pendant 5 ans :",
+            f"- Estimation sur {montant:,.0f}€ à 5%/an pendant {duree_restante} an(s) :",
             f"  - Gains estimés : ~{gains:,.0f}€",
             f"  - PS (17.2%) : ~{ps:,.0f}€",
             f"  - **Net perçu : ~{montant + gains - ps:,.0f}€**",
@@ -6994,7 +7318,7 @@ def tool_calculer_impot_societes(args: Dict) -> str:
     acompte = is_total / 4  # simplification
 
     lines = [
-        "# Impôt sur les Sociétés (IS) 2025",
+        f"# Impôt sur les Sociétés (IS) {ANNEE_DECLARATION}",
         "",
         "## Paramètres",
         f"- Bénéfice imposable : {benefice:,.0f}€",
@@ -7228,7 +7552,15 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
     rev_staking = float(args.get("revenus_staking", 0))
     rev_mining = float(args.get("revenus_mining", 0))
     rev_nft = float(args.get("revenus_nft", 0))
-    tmi = float(args.get("tmi", 30))
+    rni_hors_crypto = float(args.get("revenu_net_imposable", 0))
+    situation = args.get("situation_famille", "celibataire")
+    nb_enfants = int(args.get("nb_enfants", 0))
+    nb_parts = calculer_parts(situation, nb_enfants)
+
+    if rni_hors_crypto > 0:
+        tmi = calculer_ir(rni_hors_crypto, nb_parts)["taux_marginal"]
+    else:
+        tmi = float(args.get("tmi", 30))
 
     SEUIL_IMPOSITION = 305.0
     PFU_IR = 12.8
@@ -7236,7 +7568,7 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
     PFU_TOTAL = 30.0
 
     lines = [
-        "# Fiscalité des Cryptomonnaies 2025",
+        f"# Fiscalité des Cryptomonnaies {ANNEE_DECLARATION}",
         "*(Art. 150 VH bis CGI — Formulaire 2086)*",
         "",
     ]
@@ -7289,7 +7621,11 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
             pfu_total_amount = pv_apres_mv * PFU_TOTAL / 100
 
             # Option barème
-            ir_bareme = pv_apres_mv * tmi / 100
+            if rni_hors_crypto > 0:
+                ir_bareme = (calculer_ir(rni_hors_crypto + pv_apres_mv, nb_parts)["impot_net"]
+                             - calculer_ir(rni_hors_crypto, nb_parts)["impot_net"])
+            else:
+                ir_bareme = pv_apres_mv * tmi / 100
             ps_bareme = pv_apres_mv * PFU_PS / 100
             total_bareme = ir_bareme + ps_bareme
 
@@ -7301,8 +7637,8 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
                 f"|----------|----------|--------------|",
                 f"| {pfu_ir_amount:,.2f}€ | {pfu_ps_amount:,.2f}€ | **{pfu_total_amount:,.2f}€** |",
                 "",
-                f"### Option B — Barème IR progressif + PS (TMI {tmi}%)",
-                f"| IR barème ({tmi}%) | PS 17.2% | **Total barème** |",
+                f"### Option B — Barème IR progressif + PS (TMI {tmi:.0f}%)",
+                f"| IR barème ({tmi:.0f}%) | PS 17.2% | **Total barème** |",
                 f"|-------------------|----------|-----------------|",
                 f"| {ir_bareme:,.2f}€ | {ps_bareme:,.2f}€ | **{total_bareme:,.2f}€** |",
                 "",
@@ -7553,8 +7889,8 @@ def tool_simuler_sci(args: Dict) -> str:
 
     if qp_resultat_ir < 0:
         # Déficit foncier
-        deficit_imputable_rg = min(abs(qp_resultat_ir), 10_700)
-        deficit_report = max(0, abs(qp_resultat_ir) - 10_700)
+        deficit_imputable_rg = min(abs(qp_resultat_ir), DEFICIT_FONCIER_PLAFOND)
+        deficit_report = max(0, abs(qp_resultat_ir) - DEFICIT_FONCIER_PLAFOND)
         ir_sur_loyers = 0.0
         ps_sur_loyers = 0.0
         economie_deficit = deficit_imputable_rg * tmi / 100
@@ -7924,7 +8260,7 @@ def tool_guide_fiscalite_agricole(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     lines = [
-        "# Fiscalité Agricole 2025",
+        f"# Fiscalité Agricole {ANNEE_DECLARATION}",
         "",
         "## Régimes d'imposition agricole",
         "",
@@ -8964,7 +9300,7 @@ def tool_calculer_tva(args: Dict) -> str:
         "| **Réduit** | 5.5% | Alimentation, livres, travaux économies d'énergie, billetterie |",
         "| **Super-réduit** | 2.1% | Médicaments remboursables, presse, spectacles vivants |",
         "",
-        "## Seuils de franchise en base 2025",
+        f"## Seuils de franchise en base {ANNEE_DECLARATION}",
         "",
         f"| Activité | Seuil principal | Seuil majoré |",
         f"|---------|----------------|--------------|",
@@ -9074,29 +9410,36 @@ def tool_guide_auto_entrepreneur(args: Dict) -> str:
     premiere_annee = bool(args.get("premiere_annee", False))
     acre = bool(args.get("beneficie_acre", False))
 
-    # Seuils et taux 2025
     ACTIVITES = {
         "vente_marchandises": {
             "label": "Vente de marchandises / hébergement / restauration",
-            "seuil_ca": 188_700,
-            "seuil_tva_franchise": 85_000,
-            "taux_cotisations": 0.128,
+            "seuil_ca": SEUIL_MICRO_VENTE,
+            "seuil_tva_franchise": SEUIL_TVA_FRANCHISE_VENTE,
+            "taux_cotisations": COTISATIONS_AE_VENTE,
             "taux_vfl": 0.01,
             "abattement_ir": 0.71,
         },
         "services_bic": {
             "label": "Prestations de services BIC (artisans, commerçants)",
-            "seuil_ca": 77_700,
-            "seuil_tva_franchise": 37_500,
-            "taux_cotisations": 0.214,
+            "seuil_ca": SEUIL_MICRO_SERVICES,
+            "seuil_tva_franchise": SEUIL_TVA_FRANCHISE_SERVICES,
+            "taux_cotisations": COTISATIONS_AE_SERVICES_BIC,
             "taux_vfl": 0.017,
             "abattement_ir": 0.50,
         },
         "services_bnc": {
-            "label": "Professions libérales / BNC",
-            "seuil_ca": 77_700,
-            "seuil_tva_franchise": 37_500,
-            "taux_cotisations": 0.231,
+            "label": "Professions libérales non réglementées / BNC (régime général)",
+            "seuil_ca": SEUIL_MICRO_SERVICES,
+            "seuil_tva_franchise": SEUIL_TVA_FRANCHISE_SERVICES,
+            "taux_cotisations": COTISATIONS_AE_BNC,
+            "taux_vfl": 0.022,
+            "abattement_ir": 0.34,
+        },
+        "services_bnc_cipav": {
+            "label": "Professions libérales réglementées / BNC (Cipav)",
+            "seuil_ca": SEUIL_MICRO_SERVICES,
+            "seuil_tva_franchise": SEUIL_TVA_FRANCHISE_SERVICES,
+            "taux_cotisations": COTISATIONS_AE_BNC_CIPAV,
             "taux_vfl": 0.022,
             "abattement_ir": 0.34,
         },
@@ -9122,7 +9465,7 @@ def tool_guide_auto_entrepreneur(args: Dict) -> str:
     vfl_montant = ca * vfl_taux
 
     lines = [
-        "# Guide Auto-Entrepreneur (Micro-Entrepreneur) 2025",
+        f"# Guide Auto-Entrepreneur (Micro-Entrepreneur) {ANNEE_DECLARATION}",
         "",
         "## Activité",
         f"**{act['label']}**",
@@ -9445,7 +9788,7 @@ def tool_guide_defiscalisation_solidaire(args: Dict) -> str:
         impot_actuel = calculer_ir(revenu_net_imposable, nb_parts)["impot_net"]
 
     lines = [
-        "# Défiscalisation Solidaire & Éthique 2025",
+        f"# Défiscalisation Solidaire & Éthique {ANNEE_DECLARATION}",
         "",
         "## 1. Dons aux associations et organismes",
         "",
@@ -9576,17 +9919,20 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     travaux_justifies = float(args.get("travaux_justifies", 0))
     duree_detention_ans = int(args.get("duree_detention_ans", 0))
     type_bien = args.get("type_bien", "secondaire")
+    amortissements_deduits = float(args.get("amortissements_deduits", 0))
+    residence_services = bool(args.get("residence_services", False))
     primo_accedant_acheteur = bool(args.get("primo_accedant_acheteur", False))
 
     # Prix de revient
     # Option forfaitaire : +7.5% sur le prix d'achat pour les frais d'acquisition
     # + travaux : réel si justifiés, ou forfait 15% si détention > 5 ans
     frais_achat_retenus = max(frais_achat, prix_achat * 0.075)
-    if duree_detention_ans >= 5:
+    if duree_detention_ans >= 5 and type_bien != "lmnp":
         travaux_retenus = max(travaux_justifies, prix_achat * 0.15)
     else:
         travaux_retenus = travaux_justifies
-    prix_revient = prix_achat + frais_achat_retenus + travaux_retenus
+    reintegration = amortissements_deduits if type_bien == "lmnp" and not residence_services else 0.0
+    prix_revient = max(0, prix_achat + frais_achat_retenus + travaux_retenus - reintegration)
     pv_brute = max(0, prix_vente - prix_revient)
 
     # Abattements pour durée de détention
@@ -9620,12 +9966,9 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     pv_imposable_ir = pv_brute * (1 - ab_ir)
     pv_imposable_ps = pv_brute * (1 - ab_ps)
 
-    ir_pv = pv_imposable_ir * 0.19   # taux fixe 19%
-    ps_pv = pv_imposable_ps * 0.172  # PS 17.2%
-    total_fiscal = ir_pv + ps_pv
-    net = pv_brute - total_fiscal
+    ir_pv = pv_imposable_ir * 0.19
+    ps_pv = pv_imposable_ps * 0.172
 
-    # Taxe sur les hautes plus-values (si PV nette > 50 000€)
     def taxe_haute_pv(pv_nette: float) -> float:
         if pv_nette <= 50_000:
             return 0.0
@@ -9647,6 +9990,8 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
         return taxe
 
     taxe_hpv = taxe_haute_pv(pv_imposable_ir) if pv_imposable_ir > 50_000 else 0
+    total_fiscal = ir_pv + ps_pv + taxe_hpv
+    net = pv_brute - total_fiscal
 
     lines = [
         "# Plus-Value Immobilière — Calcul Officiel",
@@ -9658,16 +10003,41 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
         f"| Prix d'acquisition | {prix_achat:,.0f}€ |",
         f"| Frais d'acquisition (réel : {frais_achat:,.0f}€ / forfait 7.5% : {prix_achat*0.075:,.0f}€) | **{frais_achat_retenus:,.0f}€** |",
     ]
-    if duree_detention_ans >= 5:
+    if type_bien == "lmnp":
+        lines.append(f"| Travaux justifiés (forfait 15% écarté : travaux déjà amortis en LMNP) | {travaux_retenus:,.0f}€ |")
+    elif duree_detention_ans >= 5:
         lines.append(f"| Travaux (réel : {travaux_justifies:,.0f}€ / forfait 15% : {prix_achat*0.15:,.0f}€) | **{travaux_retenus:,.0f}€** |")
     else:
         lines.append(f"| Travaux justifiés (< 5 ans : forfait non disponible) | {travaux_retenus:,.0f}€ |")
+    if reintegration > 0:
+        lines.append(f"| Amortissements LMNP réintégrés (LF 2025) | **−{reintegration:,.0f}€** |")
     lines += [
         f"| **Prix de revient total** | **{prix_revient:,.0f}€** |",
         "",
         f"**Plus-value brute : {prix_vente:,.0f}€ − {prix_revient:,.0f}€ = {pv_brute:,.0f}€**",
         "",
     ]
+    if type_bien == "lmnp":
+        if residence_services:
+            lines += [
+                "> Résidence services (étudiante, senior, EHPAD) : les amortissements déduits ne sont",
+                "> **pas** réintégrés au prix d'acquisition.",
+                "",
+            ]
+        elif amortissements_deduits > 0:
+            pv_sans = max(0, prix_vente - (prix_revient + reintegration))
+            lines += [
+                "> Depuis la loi de finances 2025, les amortissements déduits en LMNP réel sont retranchés",
+                "> du prix d'acquisition (art. 150 VB II CGI). Sans cette réintégration, la plus-value brute",
+                f"> aurait été de {pv_sans:,.0f}€ au lieu de {pv_brute:,.0f}€.",
+                "",
+            ]
+        else:
+            lines += [
+                "> Renseignez `amortissements_deduits` (cumul des amortissements pratiqués en LMNP réel) :",
+                "> depuis la loi de finances 2025 ils sont retranchés du prix d'acquisition.",
+                "",
+            ]
 
     # Exonérations
     if type_bien == "residence_principale":
@@ -9710,7 +10080,6 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
             f"- Taxe : **{taxe_hpv:,.0f}€**",
             "",
         ]
-        total_fiscal += taxe_hpv
 
     lines += [
         "## Résultat",
@@ -9723,7 +10092,7 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     if taxe_hpv > 0:
         lines.append(f"| Taxe haute PV | {taxe_hpv:,.0f}€ |")
     lines += [
-        f"| **Total fiscal** | **{total_fiscal:,.0f}€** ({total_fiscal/pv_brute*100:.1f}% de la PV) |",
+        f"| **Total fiscal** | **{total_fiscal:,.0f}€**" + (f" ({total_fiscal/pv_brute*100:.1f}% de la PV) |" if pv_brute > 0 else " |"),
         f"| **Net perçu** | **{net:,.0f}€** |",
         "",
     ]
@@ -9766,12 +10135,11 @@ def tool_guide_taxe_fonciere(args: Dict) -> str:
     rni = float(args.get("revenu_net_imposable", 0))
     nb_parts = float(args.get("nb_parts", 1.0))
     type_bien = args.get("type_bien", "bati")
-    annee_construction = int(args.get("annee_construction", 0))
     logement_neuf = bool(args.get("logement_neuf", False))
     personne_agee_modeste = bool(args.get("personne_agee_modeste", False))
 
     lines = [
-        "# Taxe Foncière — Guide Complet 2025",
+        f"# Taxe Foncière — Guide Complet {ANNEE_DECLARATION}",
         "",
         "## Principes",
         "- **Taxe foncière sur propriétés bâties (TFPB)** : immeubles, maisons, appartements, dépendances",
@@ -10164,7 +10532,7 @@ def tool_guide_revision_declaration(args: Dict) -> str:
 # ─── Outils 2.6.0 ────────────────────────────────────────────────────────────
 
 def tool_comparer_statuts_professionnel(args: Dict) -> str:
-    """Compare CDI vs statuts independants : AE, SASU, EURL IS, portage salarial."""
+    """Compare CDI vs statuts indépendants : AE, SASU, EURL IS, portage salarial."""
     salaire_brut_cdi = float(args.get("salaire_brut_annuel_cdi", 0))
     tjm = float(args.get("tjm_freelance", 0))
     jours = int(args.get("jours_travailles_an", 200))
@@ -10177,9 +10545,10 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     ACTIVITES_PARAMS = {
-        "services_bnc": {"label": "Professions liberales / BNC (conseil, IT, sante...)", "taux_ae_cotis": 0.231, "abatt_ae_ir": 0.34, "seuil_ae": 77_700},
-        "services_bic": {"label": "Prestations de services BIC (artisan, commerce)", "taux_ae_cotis": 0.214, "abatt_ae_ir": 0.50, "seuil_ae": 77_700},
-        "vente_marchandises": {"label": "Vente de marchandises / hebergement", "taux_ae_cotis": 0.128, "abatt_ae_ir": 0.71, "seuil_ae": 188_700},
+        "services_bnc": {"label": "Professions libérales non réglementées / BNC (conseil, IT...)", "taux_ae_cotis": COTISATIONS_AE_BNC, "abatt_ae_ir": 0.34, "seuil_ae": SEUIL_MICRO_SERVICES},
+        "services_bnc_cipav": {"label": "Professions libérales réglementées / BNC (Cipav)", "taux_ae_cotis": COTISATIONS_AE_BNC_CIPAV, "abatt_ae_ir": 0.34, "seuil_ae": SEUIL_MICRO_SERVICES},
+        "services_bic": {"label": "Prestations de services BIC (artisan, commerce)", "taux_ae_cotis": COTISATIONS_AE_SERVICES_BIC, "abatt_ae_ir": 0.50, "seuil_ae": SEUIL_MICRO_SERVICES},
+        "vente_marchandises": {"label": "Vente de marchandises / hébergement", "taux_ae_cotis": COTISATIONS_AE_VENTE, "abatt_ae_ir": 0.71, "seuil_ae": SEUIL_MICRO_VENTE},
     }
     act = ACTIVITES_PARAMS.get(type_activite, ACTIVITES_PARAMS["services_bnc"])
 
@@ -10191,7 +10560,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
             return {}
         net_salarie = brut * 0.78        # charges salariales ~22%
         cout_employeur = brut * 1.42     # charges patronales ~42%
-        abatt = min(14_426, max(495, net_salarie * 0.10))
+        abatt = abattement_frais_pro(net_salarie)
         rni = max(0, net_salarie - abatt)
         res_ir = calculer_ir(rni, nb_parts)
         ir = res_ir["impot_net"]
@@ -10230,15 +10599,14 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
     def simuler_sasu(ca_val: float) -> Dict:
         if ca_val <= 0:
             return {}
-        SMIC_BRUT = 21_622  # 2025
         # President assimile salarie : patronales ~55%, salariales ~23%
-        cout_salarial = round(SMIC_BRUT * 1.55)
-        net_smic = round(SMIC_BRUT * 0.77)
+        cout_salarial = round(SMIC_BRUT_ANNUEL * 1.55)
+        net_smic = round(SMIC_BRUT_ANNUEL * 0.77)
         is_base = max(0, ca_val - charges_pro - cout_salarial)
         is_total = round(min(is_base, 42_500) * 0.15 + max(0, is_base - 42_500) * 0.25)
         dividendes_bruts = max(0, is_base - is_total)
         net_dividendes = round(dividendes_bruts * 0.70)
-        abatt = min(14_426, max(495, net_smic * 0.10))
+        abatt = abattement_frais_pro(net_smic)
         ir_smic = calculer_ir(max(0, net_smic - abatt), nb_parts)["impot_net"]
         net_final = net_smic - round(ir_smic) + net_dividendes
         return {
@@ -10291,7 +10659,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         base = ca_val - frais_gestion
         salaire_brut = round(base / 1.42)
         net_salarie = round(salaire_brut * 0.78)
-        abatt = min(14_426, max(495, net_salarie * 0.10))
+        abatt = abattement_frais_pro(net_salarie)
         rni = max(0, net_salarie - abatt)
         ir = round(calculer_ir(rni, nb_parts)["impot_net"])
         net_final = net_salarie - ir
@@ -10331,11 +10699,11 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
 
     # ── Assemblage ────────────────────────────────────────────────────────────
     lines = [
-        "# Comparaison Statuts Professionnels : CDI vs Independant",
+        "# Comparaison Statuts Professionnels : CDI vs Indépendant",
         "",
-        f"*Simulation indicative — Bareme {ANNEE_FISCALE}*",
+        f"*Simulation indicative — Barème {ANNEE_FISCALE}*",
         "",
-        "## Parametres",
+        "## Paramètres",
         "",
     ]
     if salaire_brut_cdi > 0:
@@ -10344,7 +10712,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         desc_ca = f"{tjm:.0f} EUR/j x {jours} j" if tjm > 0 and ca_direct == 0 else "CA direct"
         lines.append(f"- CA freelance : {ca:,.0f} EUR/an ({desc_ca})")
     lines += [
-        f"- Activite : {act['label']}",
+        f"- Activité : {act['label']}",
         f"- Situation : {situation}, {nb_enfants} enfant(s) — {nb_parts:.1f} part(s) fiscale(s)",
         "",
     ]
@@ -10352,20 +10720,20 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
     cdi_res = simuler_cdi(salaire_brut_cdi)
     if cdi_res:
         lines += [
-            "## CDI / Salarie",
+            "## CDI / Salarié",
             "",
             "| Indicateur | Montant |",
             "|-----------|---------|",
             f"| Salaire brut | {cdi_res['brut']:,} EUR |",
-            f"| Cout employeur total | {cdi_res['cout_employeur']:,} EUR |",
-            f"| Net salarie (apres charges) | {cdi_res['net_salarie']:,} EUR |",
+            f"| Coût employeur total | {cdi_res['cout_employeur']:,} EUR |",
+            f"| Net salarié (après charges) | {cdi_res['net_salarie']:,} EUR |",
             f"| Revenu net imposable | {cdi_res['rni']:,} EUR |",
-            f"| Impot sur le revenu | {cdi_res['ir']:,} EUR |",
+            f"| Impôt sur le revenu | {cdi_res['ir']:,} EUR |",
             f"| **Net en poche** | **{cdi_res['net_final']:,} EUR** |",
-            f"| Ratio net / cout employeur | {cdi_res['ratio_net_cout']} % |",
+            f"| Ratio net / coût employeur | {cdi_res['ratio_net_cout']} % |",
             f"| Taux marginal (TMI) | {cdi_res['tmi']:.0f} % |",
             "",
-            "Protection sociale : chomage, maladie, retraite, prevoyance — couverture complete.",
+            "Protection sociale : chômage, maladie, retraite, prévoyance — couverture complète.",
             "",
         ]
 
@@ -10376,63 +10744,63 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         port_r = simuler_portage(ca)
 
         lines += [
-            "## Comparatif des statuts independants",
+            "## Comparatif des statuts indépendants",
             f"*(CA annuel HT : {ca:,.0f} EUR)*",
             "",
             "| Statut | Net en poche | Net / CA | Protection sociale |",
             "|--------|-------------|----------|--------------------|",
             f"| Auto-entrepreneur | {ae_r['net_final']:,} EUR | {ae_r['ratio_net_ca']} % | Minimale (SSI) |",
-            f"| SASU — SMIC + dividendes | {sasu_r['net_final']:,} EUR | {sasu_r['ratio_net_ca']} % | Assimile salarie |",
-            f"| EURL a l'IS | {eurl_r['net_final']:,} EUR | {eurl_r['ratio_net_ca']} % | TNS (SSI) |",
-            f"| Portage salarial | {port_r['net_final']:,} EUR | {port_r['ratio_net_ca']} % | Salarie complete |",
+            f"| SASU — SMIC + dividendes | {sasu_r['net_final']:,} EUR | {sasu_r['ratio_net_ca']} % | Assimilé salarié |",
+            f"| EURL à l'IS | {eurl_r['net_final']:,} EUR | {eurl_r['ratio_net_ca']} % | TNS (SSI) |",
+            f"| Portage salarial | {port_r['net_final']:,} EUR | {port_r['ratio_net_ca']} % | Salarié complète |",
         ]
         if cdi_res:
-            lines.append(f"| CDI (reference) | {cdi_res['net_final']:,} EUR | — | Complete |")
+            lines.append(f"| CDI (référence) | {cdi_res['net_final']:,} EUR | — | Complète |")
         lines.append("")
 
         if ae_r.get("hors_seuil"):
-            lines.append(f"Note : CA {ca:,.0f} EUR depasse le seuil AE ({act['seuil_ae']:,} EUR). Le statut AE n'est pas applicable.")
+            lines.append(f"Note : CA {ca:,.0f} EUR dépasse le seuil AE ({act['seuil_ae']:,} EUR). Le statut AE n'est pas applicable.")
             lines.append("")
 
         lines += [
-            "### Detail Auto-Entrepreneur",
+            "### Détail Auto-Entrepreneur",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
             f"| CA annuel HT | {ae_r['ca']:,} EUR |",
             f"| Cotisations sociales ({act['taux_ae_cotis']*100:.1f} %) | {ae_r['cotisations']:,} EUR |",
             f"| Revenu imposable (abatt. {int((1-act['abatt_ae_ir'])*100)} %) | {ae_r['rni']:,} EUR |",
-            f"| Impot sur le revenu | {ae_r['ir']:,} EUR |",
+            f"| Impôt sur le revenu | {ae_r['ir']:,} EUR |",
             f"| Net en poche | {ae_r['net_final']:,} EUR |",
             "",
-            "### Detail SASU",
-            "*(Remuneration SMIC + dividendes soumis PFU 30 %)*",
+            "### Détail SASU",
+            "*(Rémunération SMIC + dividendes soumis PFU 30 %)*",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
             f"| CA | {sasu_r['ca']:,} EUR |",
-            f"| Cout salarial SMIC (pres. assimile) | {sasu_r['cout_salarial']:,} EUR |",
+            f"| Coût salarial SMIC (prés. assimilé) | {sasu_r['cout_salarial']:,} EUR |",
             f"| Base IS | {sasu_r['is_base']:,} EUR |",
             f"| IS (15 % / 25 %) | {sasu_r['is_total']:,} EUR |",
             f"| Dividendes nets (PFU 30 %) | {sasu_r['net_dividendes']:,} EUR |",
             f"| Net salaire SMIC | {sasu_r['net_smic']:,} EUR |",
             f"| Net en poche | {sasu_r['net_final']:,} EUR |",
             "",
-            "### Detail EURL a l'IS",
-            "*(Remuneration 65 % du benefice + dividendes PFU 30 %)*",
+            "### Détail EURL à l'IS",
+            "*(Rémunération 65 % du bénéfice + dividendes PFU 30 %)*",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
             f"| CA | {eurl_r['ca']:,} EUR |",
-            f"| Remuneration brute gerant | {eurl_r['remun_brute']:,} EUR |",
+            f"| Rémunération brute gérant | {eurl_r['remun_brute']:,} EUR |",
             f"| Cotisations TNS (~30.5 %) | {eurl_r['cotis_tns']:,} EUR |",
-            f"| Net remuneration | {eurl_r['net_remun']:,} EUR |",
-            f"| IR sur remuneration | {eurl_r['ir_remun']:,} EUR |",
+            f"| Net rémunération | {eurl_r['net_remun']:,} EUR |",
+            f"| IR sur rémunération | {eurl_r['ir_remun']:,} EUR |",
             f"| IS (15 % / 25 %) | {eurl_r['is_total']:,} EUR |",
             f"| Net dividendes (PFU 30 %) | {eurl_r['net_dividendes']:,} EUR |",
             f"| Net en poche | {eurl_r['net_final']:,} EUR |",
             "",
-            "### Detail Portage salarial",
+            "### Détail Portage salarial",
             "*(Frais de gestion 8 % + charges salariales classiques)*",
             "",
             "| Poste | Montant |",
@@ -10440,8 +10808,8 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
             f"| CA | {port_r['ca']:,} EUR |",
             f"| Frais de gestion (8 %) | {port_r['frais_gestion']:,} EUR |",
             f"| Salaire brut | {port_r['salaire_brut']:,} EUR |",
-            f"| Net salarie | {port_r['net_salarie']:,} EUR |",
-            f"| Impot sur le revenu | {port_r['ir']:,} EUR |",
+            f"| Net salarié | {port_r['net_salarie']:,} EUR |",
+            f"| Impôt sur le revenu | {port_r['ir']:,} EUR |",
             f"| Net en poche | {port_r['net_final']:,} EUR |",
             "",
         ]
@@ -10449,10 +10817,10 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
     if cdi_res and jours > 0:
         net_cdi = cdi_res["net_final"]
         lines += [
-            "## TJM minimum pour egaler le net CDI",
-            f"*(Base : {jours} jours factures/an — CDI net de reference : {net_cdi:,} EUR)*",
+            "## TJM minimum pour égaler le net CDI",
+            f"*(Base : {jours} jours facturés/an — CDI net de référence : {net_cdi:,} EUR)*",
             "",
-            "| Statut | TJM minimum | CA annuel equivalent |",
+            "| Statut | TJM minimum | CA annuel équivalent |",
             "|--------|------------|---------------------|",
         ]
         for key, label in [("ae", "Auto-entrepreneur"), ("sasu", "SASU"), ("eurl", "EURL IS"), ("portage", "Portage salarial")]:
@@ -10461,157 +10829,166 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         lines.append("")
 
     lines += [
-        "## Synthese et recommandations",
+        "## Synthèse et recommandations",
         "",
-        "### Avantages du passage en independant",
-        "- Net potentiellement superieur car le cout employeur devient du CA facturable",
-        "- Deductions professionnelles etendues (materiel, bureau, formation, vehicule...)",
-        "- Optimisation IS + dividendes possible en SASU/EURL des que le CA depasse ~60 000 EUR",
-        "- Flexibilite sur les missions, les clients, le rythme de travail",
+        "### Avantages du passage en indépendant",
+        "- Net potentiellement supérieur car le coût employeur devient du CA facturable",
+        "- Déductions professionnelles étendues (matériel, bureau, formation, véhicule...)",
+        "- Optimisation IS + dividendes possible en SASU/EURL dès que le CA dépasse ~60 000 EUR",
+        "- Flexibilité sur les missions, les clients, le rythme de travail",
         "",
         "### Risques et contraintes",
-        "- Pas d'assurance chomage en AE / EURL (sauf portage ou option SASU specifique)",
+        "- Pas d'assurance chômage en AE / EURL (sauf portage ou option SASU spécifique)",
         "- Retraite : droits plus faibles en TNS — compenser via PER ou assurance-vie",
-        "- Irrégularite des revenus : constituer 3 a 6 mois de tresorerie de securite",
-        "- Frais de structure : expert-comptable (~1 500 a 2 500 EUR/an pour SASU/EURL)",
-        "- Delai de carence IJSS maladie : 3 jours en TNS vs 0 en salarie",
+        "- Irrégularite des revenus : constituer 3 à 6 mois de trésorerie de sécurité",
+        "- Frais de structure : expert-comptable (~1 500 à 2 500 EUR/an pour SASU/EURL)",
+        "- Délai de carence IJSS maladie : 3 jours en TNS vs 0 en salarié",
         "",
         "### Quel statut selon le CA ?",
         "",
-        "| Fourchette CA | Statut recommande | Raison |",
+        "| Fourchette CA | Statut recommandé | Raison |",
         "|---------------|-------------------|--------|",
-        f"| < {act['seuil_ae']:,} EUR | Auto-entrepreneur | Simplicite, zero comptabilite |",
+        f"| < {act['seuil_ae']:,} EUR | Auto-entrepreneur | Simplicité, zéro comptabilité |",
         f"| {act['seuil_ae']:,} – 100 000 EUR | EURL IS ou SASU | Optimisation IS + protection |",
-        "| > 100 000 EUR | SASU | IS reduit, protection assimile salarie, image professionnelle |",
-        "| Transition / missions courtes | Portage salarial | Securite, pas de creation de societe |",
+        "| > 100 000 EUR | SASU | IS réduit, protection assimilé salarié, image professionnelle |",
+        "| Transition / missions courtes | Portage salarial | Sécurité, pas de création de société |",
         "",
         "---",
-        "*Simulation basee sur les taux 2025. Les taux de cotisations sont approximatifs.*",
-        "*Consultez un expert-comptable avant toute decision de changement de statut.*",
+        "*Simulation basée sur les taux 2025. Les taux de cotisations sont approximatifs.*",
+        "*Consultez un expert-comptable avant toute décision de changement de statut.*",
     ]
     return "\n".join(lines)
 
 
 def tool_verifier_actualite_fiscale(args: Dict) -> str:
-    """Liste les baremes et donnees fiscales integres au MCP et signale ce qui necessite une mise a jour."""
+    """Liste les barèmes et données fiscales intégrés au MCP et signale ce qui nécessite une mise à jour."""
     annee_cible = int(args.get("annee_cible", 2026))
-    annee_actuelle_mcp = 2026   # annee de reference du MCP (mettre a jour a chaque release)
-    annee_revenus_mcp = annee_actuelle_mcp - 1
+    annee_actuelle_mcp = ANNEE_DECLARATION
+    annee_revenus_mcp = ANNEE_REVENUS
 
     lines = [
-        "# Verification Actualite Fiscale du MCP",
+        "# Vérification Actualité Fiscale du MCP",
         "",
-        f"**Annee fiscale couverte par ce MCP** : {ANNEE_FISCALE}",
-        f"**Annee cible demandee** : {annee_cible} (revenus {annee_cible - 1})",
+        f"**Année fiscale couverte par ce MCP** : {ANNEE_FISCALE}",
+        f"**Année cible demandée** : {annee_cible} (revenus {annee_cible - 1})",
         "",
     ]
 
     if annee_cible == annee_actuelle_mcp:
         lines += [
-            "Statut : **Le MCP est a jour** pour cette annee fiscale.",
+            "Statut : **Le MCP est à jour** pour cette année fiscale.",
             "",
         ]
     elif annee_cible < annee_actuelle_mcp:
         lines += [
-            f"Statut : L'annee {annee_cible} est anterieure a la version actuelle du MCP ({annee_actuelle_mcp}).",
-            "Les donnees historiques peuvent etre consultees mais les baremes actuels s'appliquent.",
+            f"Statut : L'année {annee_cible} est antérieure à la version actuelle du MCP ({annee_actuelle_mcp}).",
+            "Les données historiques peuvent être consultées mais les barèmes actuels s'appliquent.",
             "",
         ]
     else:
         delta = annee_cible - annee_actuelle_mcp
         lines += [
-            f"Statut : **Mise a jour requise** — {annee_cible} est {delta} an(s) en avance sur les donnees du MCP.",
+            f"Statut : **Mise à jour requise** — {annee_cible} est {delta} an(s) en avance sur les données du MCP.",
             "",
-            "Les elements ci-dessous sont a verifier et mettre a jour dans le code source :",
+            "Les éléments ci-dessous sont à vérifier et mettre à jour dans le code source :",
             "",
         ]
 
     lines += [
-        "## Donnees integrees dans le MCP (version actuelle)",
+        "## Données intégrées dans le MCP (version actuelle)",
         "",
-        "### Impot sur le revenu",
+        "### Impôt sur le revenu",
         "",
-        "| Parametre | Valeur MCP | A verifier pour annee cible |",
+        "| Paramètre | Valeur MCP | A vérifier pour année cible |",
         "|-----------|-----------|------------------------------|",
-        f"| Annee bareme actif | {ANNEE_FISCALE} | Indexation annuelle (~1.8 %/an) |",
+        f"| Année barème actif | {ANNEE_FISCALE} | Indexation LFI {annee_actuelle_mcp} : +{(INDEXATION_2026 - 1) * 100:.1f} % |",
     ]
     # Afficher les tranches
     for t in TRANCHES_IR_ACTIF:
         max_str = f"{t['max']:,}" if t["max"] else "+"
-        lines.append(f"| Tranche {t['taux']*100:.0f} % | {t['min']:,} – {max_str} EUR | Reindexer |")
+        lines.append(f"| Tranche {t['taux']*100:.0f} % | {t['min']:,} – {max_str} EUR | Réindexer |")
 
     lines += [
-        f"| Decote celibataire (seuil) | 1 964 EUR | Reindexer |",
-        f"| Decote couple (seuil) | 3 249 EUR | Reindexer |",
-        f"| Plafond abattement 10 % | 14 426 EUR | Reindexer |",
-        f"| Plafond demi-part QF | {PLAFOND_DEMI_PART:,} EUR | Reindexer |",
+        f"| Décote personne seule (plafond / seuil) | {DECOTE_MAX_SEUL:,} / {SEUIL_DECOTE_SEUL:,} EUR | Réindexer |",
+        f"| Décote couple (plafond / seuil) | {DECOTE_MAX_COUPLE:,} / {SEUIL_DECOTE_COUPLE:,} EUR | Réindexer |",
+        f"| Abattement 10 % (plancher / plafond) | {ABATTEMENT_FRAIS_PRO_MIN:,} / {ABATTEMENT_FRAIS_PRO_MAX:,} EUR | Réindexer |",
+        f"| Plafond demi-part QF | {PLAFOND_DEMI_PART:,} EUR | Réindexer |",
+        f"| Plafond QF parent isolé (case T) | {PLAFOND_PARENT_ISOLE:,} EUR | Réindexer |",
+        f"| PASS {annee_revenus_mcp - 1} / {annee_revenus_mcp} / {annee_actuelle_mcp} | {PASS_2024:,} / {PASS_2025:,} / {PASS_2026:,} EUR | Réindexer |",
+        f"| SMIC brut annuel | {SMIC_BRUT_ANNUEL:,} EUR | Réindexer |",
         "",
-        "### PER et epargne retraite",
+        "### PER et épargne retraite",
         "",
-        "| Parametre | Valeur MCP | Source |",
+        "| Paramètre | Valeur MCP | Source |",
         "|-----------|-----------|--------|",
-        f"| Plafond PER max | {PLAFOND_PER_MAX_2025:,} EUR | 10 % x 8 PASS — reindexer avec PASS {annee_revenus_mcp} |",
-        f"| Plafond PER min | {PLAFOND_PER_MIN_2025:,} EUR | 10 % x 1 PASS — reindexer avec PASS {annee_revenus_mcp} |",
+        f"| Plafond PER max | {PLAFOND_PER_MAX_2025:,} EUR | 10 % x 8 PASS {annee_revenus_mcp - 1} — reindexer |",
+        f"| Plafond PER min | {PLAFOND_PER_MIN_2025:,} EUR | 10 % x 1 PASS {annee_revenus_mcp - 1} — reindexer |",
         "",
-        "### Impot sur les societes",
+        "### Impôt sur les sociétés",
         "",
-        "| Parametre | Valeur MCP | Stabilite |",
+        "| Paramètre | Valeur MCP | Stabilité |",
         "|-----------|-----------|-----------|",
-        "| Taux reduit IS | 15 % jusqu'a 42 500 EUR | Stable (LF 2023) |",
+        "| Taux réduit IS | 15 % jusqu'à 42 500 EUR | Stable (LF 2023) |",
         "| Taux normal IS | 25 % | Stable |",
         "",
         "### Auto-entrepreneur / Micro",
         "",
-        "| Parametre | Valeur MCP | A verifier |",
+        "| Paramètre | Valeur MCP | A vérifier |",
         "|-----------|-----------|------------|",
-        "| Seuil CA services BIC/BNC | 77 700 EUR | Reindexation biennale possible |",
-        "| Seuil CA vente marchandises | 188 700 EUR | Reindexation biennale possible |",
-        "| Taux cotisations BNC | 23.1 % | Peut evoluer (URSSAF) |",
-        "| Taux cotisations BIC services | 21.4 % | Peut evoluer (URSSAF) |",
-        "| Seuil TVA franchise BIC | 37 500 EUR | Reindexation possible |",
-        "| Seuil TVA franchise vente | 85 000 EUR | Reindexation possible |",
+        f"| Seuil CA services BIC/BNC — activité {annee_actuelle_mcp} | {SEUIL_MICRO_SERVICES:,} EUR | Révision triennale (2026-2028) |",
+        f"| Seuil CA vente marchandises — activité {annee_actuelle_mcp} | {SEUIL_MICRO_VENTE:,} EUR | Révision triennale (2026-2028) |",
+        f"| Seuil CA services — revenus {annee_revenus_mcp} | {SEUIL_MICRO_SERVICES_REVENUS_2025:,} EUR | Base de la déclaration {annee_actuelle_mcp} |",
+        f"| Seuil CA vente — revenus {annee_revenus_mcp} | {SEUIL_MICRO_VENTE_REVENUS_2025:,} EUR | Base de la déclaration {annee_actuelle_mcp} |",
+        f"| Taux cotisations AE — BNC régime général | {pct_fr(COTISATIONS_AE_BNC)} | Peut évoluer (URSSAF) |",
+        f"| Taux cotisations AE — BNC Cipav | {pct_fr(COTISATIONS_AE_BNC_CIPAV)} | Peut évoluer (Cipav) |",
+        f"| Taux cotisations AE — BIC services | {pct_fr(COTISATIONS_AE_SERVICES_BIC)} | Peut évoluer (URSSAF) |",
+        f"| Taux cotisations AE — vente | {pct_fr(COTISATIONS_AE_VENTE)} | Peut évoluer (URSSAF) |",
+        f"| Seuil TVA franchise BIC | {SEUIL_TVA_FRANCHISE_SERVICES:,} EUR | Réforme à 25 000 EUR abandonnée |",
+        f"| Seuil TVA franchise vente | {SEUIL_TVA_FRANCHISE_VENTE:,} EUR | Réforme à 25 000 EUR abandonnée |",
+        f"| Livret A / LDDS | {pct_fr(TAUX_LIVRET_A)} depuis le {DATE_TAUX_LIVRETS} | Révisé les 1er février et 1er août |",
+        f"| LEP | {pct_fr(TAUX_LEP)} depuis le {DATE_TAUX_LIVRETS} | Révisé les 1er février et 1er août |",
         "",
         "### IFI",
         "",
-        "| Parametre | Valeur MCP | A verifier |",
+        "| Paramètre | Valeur MCP | A vérifier |",
         "|-----------|-----------|------------|",
         "| Seuil d'entree IFI | 1 300 000 EUR | Stable depuis 2018 |",
-        "| Bareme IFI | 5 tranches (0 a 1.5 %) | Stable |",
-        "| Decote IFI (1.3M – 1.4M) | 17 500 – 0.0125 x patrimoine | Stable |",
+        "| Barème IFI | 5 tranches (0 à 1.5 %) | Stable |",
+        "| Décote IFI (1.3M – 1.4M) | 17 500 – 0.0125 x patrimoine | Stable |",
         "",
         "### Droits de donation / succession",
         "",
-        "| Parametre | A verifier |",
+        "| Paramètre | A vérifier |",
         "|-----------|------------|",
-        "| Abattements (parent/enfant, grands-parents...) | Stables sauf legislation |",
-        "| Don d'argent exonere | 31 865 EUR — stable |",
-        "| Baremes progressifs par lien de parente | Stables |",
+        "| Abattements (parent/enfant, grands-parents...) | Stables sauf législation |",
+        "| Don d'argent exonéré | 31 865 EUR — stable |",
+        "| Barèmes progressifs par lien de parenté | Stables |",
         "",
         "### CEHR (contribution exceptionnelle hauts revenus)",
         "",
-        "| Parametre | Valeur MCP | A verifier |",
+        "| Paramètre | Valeur MCP | A vérifier |",
         "|-----------|-----------|------------|",
-        "| Seuil 3 % (celibataire) | 250 000 EUR | Stable |",
-        "| Seuil 4 % (celibataire) | 500 000 EUR | Stable |",
+        "| Seuil 3 % (célibataire) | 250 000 EUR | Stable |",
+        "| Seuil 4 % (célibataire) | 500 000 EUR | Stable |",
         "",
     ]
 
     if annee_cible > annee_actuelle_mcp:
         lines += [
-            "## Procedure de mise a jour",
+            "## Procédure de mise à jour",
             "",
-            "Pour mettre le MCP a jour vers une nouvelle annee fiscale :",
+            "Pour mettre le MCP à jour vers une nouvelle année fiscale :",
             "",
-            "1. Mettre a jour `TRANCHES_IR_ACTIF` avec le nouveau bareme (publie en loi de finances).",
-            "2. Ajouter `TRANCHES_IR_XXXX` avec les nouvelles tranches indexees.",
-            "3. Mettre a jour `ANNEE_FISCALE` (ex. '2027 (revenus 2026)').",
+            "1. Mettre à jour `TRANCHES_IR_ACTIF` avec le nouveau barème (publié en loi de finances).",
+            "2. Ajouter `TRANCHES_IR_XXXX` avec les nouvelles tranches indexées.",
+            "3. Mettre à jour `ANNEE_FISCALE` (ex. '2027 (revenus 2026)').",
             "4. Recalculer `PLAFOND_PER_MAX` et `PLAFOND_PER_MIN` avec le nouveau PASS.",
-            "5. Verifier les seuils AE et TVA aupres de l'URSSAF.",
-            "6. Verifier le SMIC brut annuel pour les simulations SASU.",
-            "7. Mettre a jour `__version__` et le CHANGELOG.",
+            "5. Vérifier les seuils AE et TVA auprès de l'URSSAF.",
+            "6. Vérifier le SMIC brut annuel pour les simulations SASU.",
+            "7. Mettre à jour `__version__` et le CHANGELOG.",
             "",
             "Sources officielles :",
-            "- impots.gouv.fr (baremes IR, IS, IFI)",
+            "- impôts.gouv.fr (barèmes IR, IS, IFI)",
             "- urssaf.fr (taux cotisations, PASS, seuils AE)",
             "- legifrance.gouv.fr (loi de finances)",
             "- service-public.fr (droits donation, succession)",
@@ -10620,7 +10997,7 @@ def tool_verifier_actualite_fiscale(args: Dict) -> str:
     lines += [
         "",
         "---",
-        f"*MCP version {__version__} — Donnees {ANNEE_FISCALE}*",
+        f"*MCP version {__version__} — Données {ANNEE_FISCALE}*",
     ]
     return "\n".join(lines)
 
@@ -10628,7 +11005,7 @@ def tool_verifier_actualite_fiscale(args: Dict) -> str:
 # ─── Outils 2.7.0 ────────────────────────────────────────────────────────────
 
 def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
-    """Systeme du quotient (art. 163-0 A CGI) pour revenus exceptionnels ou differes."""
+    """Système du quotient (art. 163-0 A CGI) pour revenus exceptionnels ou différés."""
     rni_ordinaire = float(args.get("rni_ordinaire", 0))
     revenu_exceptionnel = float(args["revenu_exceptionnel"])
     n = max(1, int(args.get("nombre_annees_echelement", 4)))
@@ -10649,35 +11026,35 @@ def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
     economie = surcout_sans_quotient - surcout_avec_quotient
 
     TYPES_INFOS = {
-        "indemnite_licenciement": ("Indemnite de licenciement supra-legale", "La fraction legale est exoneree (min 2 PASS). Le surplus est un revenu exceptionnel eligible au quotient."),
-        "prime_exceptionnelle":   ("Prime ou bonus exceptionnel", "N = nombre d'annees sur lesquelles le droit a ete acquis. Utiliser N=4 par defaut si non justifiable autrement."),
-        "revenus_differés":       ("Revenus differes (rappels de salaires, arrieres)", "N = nombre d'annees ecoulees entre la naissance du droit et la perception. Eligibilite automatique."),
-        "gain_stock_options":     ("Gain de levee de stock-options / RSU / AGA", "Regime specifique : taux 30% + PS 10% pour options post-mars 2012. Le quotient ne s'applique pas."),
-        "autre":                  ("Autre revenu exceptionnel ou pluriannuel", "Eligibilite a confirmer selon le caractere non recurrent et pluriannuel du revenu."),
+        "indemnite_licenciement": ("Indemnité de licenciement supra-légale", "La fraction légale est exonérée (min 2 PASS). Le surplus est un revenu exceptionnel éligible au quotient."),
+        "prime_exceptionnelle":   ("Prime ou bonus exceptionnel", "N = nombre d'années sur lesquelles le droit a été acquis. Utiliser N=4 par défaut si non justifiable autrement."),
+        "revenus_differés":       ("Revenus différés (rappels de salaires, arriérés)", "N = nombre d'années écoulées entre la naissance du droit et la perception. Éligibilité automatique."),
+        "gain_stock_options":     ("Gain de levée de stock-options / RSU / AGA", "Régime spécifique : taux 30% + PS 10% pour options post-mars 2012. Le quotient ne s'applique pas."),
+        "autre":                  ("Autre revenu exceptionnel ou pluriannuel", "Éligibilité à confirmer selon le caractère non récurrent et pluriannuel du revenu."),
     }
     label, info_type = TYPES_INFOS.get(type_revenu, TYPES_INFOS["autre"])
 
     lines = [
-        "# Systeme du Quotient — Revenus Exceptionnels",
+        "# Système du Quotient — Revenus Exceptionnels",
         "*(Art. 163-0 A CGI)*",
         "",
         "## Principe",
-        f"Le quotient divise le revenu exceptionnel par N={n} pour calculer l'impot,",
-        f"puis multiplie par {n}. Il limite l'effet de la progressivite de l'IR.",
+        f"Le quotient divise le revenu exceptionnel par N={n} pour calculer l'impôt,",
+        f"puis multiplié par {n}. Il limite l'effet de la progressivité de l'IR.",
         "",
         "## Simulation",
         "",
-        "| Scenario | RNI total | IR total | Impot sur le revenu exceptionnel |",
+        "| Scénario | RNI total | IR total | Impôt sur le revenu exceptionnel |",
         "|----------|-----------|---------|----------------------------------|",
         f"| RNI ordinaire seul | {rni_ordinaire:,.0f} EUR | {ir_ordinaire:,.0f} EUR | — |",
-        f"| Declaration normale (sans quotient) | {rni_ordinaire + revenu_exceptionnel:,.0f} EUR | {ir_sans_quotient_total:,.0f} EUR | {surcout_sans_quotient:,.0f} EUR |",
+        f"| Déclaration normale (sans quotient) | {rni_ordinaire + revenu_exceptionnel:,.0f} EUR | {ir_sans_quotient_total:,.0f} EUR | {surcout_sans_quotient:,.0f} EUR |",
         f"| Avec quotient (N={n}, art. 163-0 A) | — | {ir_avec_quotient_total:,.0f} EUR | {surcout_avec_quotient:,.0f} EUR |",
         "",
     ]
 
     if economie <= 0:
         lines += [
-            "Le systeme du quotient n'apporte pas d'avantage ici.",
+            "Le système du quotient n'apporte pas d'avantage ici.",
             "Votre revenu exceptionnel ne vous fait pas changer de tranche marginale.",
             "",
         ]
@@ -10685,11 +11062,11 @@ def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
         taux_eff_sans = surcout_sans_quotient / revenu_exceptionnel * 100
         taux_eff_avec = surcout_avec_quotient / revenu_exceptionnel * 100
         lines += [
-            f"### Economie grace au quotient : **{economie:,.0f} EUR**",
+            f"### Économie grâce au quotient : **{economie:,.0f} EUR**",
             "",
             f"| | Sans quotient | Avec quotient (N={n}) |",
             f"|--|--------------|----------------------|",
-            f"| Impot sur le revenu exceptionnel | {surcout_sans_quotient:,.0f} EUR | {surcout_avec_quotient:,.0f} EUR |",
+            f"| Impôt sur le revenu exceptionnel | {surcout_sans_quotient:,.0f} EUR | {surcout_avec_quotient:,.0f} EUR |",
             f"| Taux effectif | {taux_eff_sans:.1f}% | {taux_eff_avec:.1f}% |",
             "",
         ]
@@ -10699,20 +11076,20 @@ def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
         "",
         info_type,
         "",
-        "## Revenus eligibles au quotient",
+        "## Revenus éligibles au quotient",
         "",
         "| Type | Coefficient N | Remarque |",
         "|------|---------------|----------|",
-        "| Rappels de salaires / arrieres | Annees concernees | Eligibilite automatique |",
-        "| Indemnite de licenciement supra-legale | 4 (usage standard) | Fraction legale exoneree |",
-        "| Revenus d'activite pluriannuels (gerant, liberal) | Annees d'activite | Art. 163-0 A al. 2 |",
-        "| Prime ou bonus exceptionnel non recurrent | 4 | Sur acceptation administration |",
-        "| Gain levee d'options / AGA ante-mars 2012 | Variable | Regime fiscal specifique |",
+        "| Rappels de salaires / arriérés | Années concernées | Éligibilité automatique |",
+        "| Indemnité de licenciement supra-légale | 4 (usage standard) | Fraction légale exonérée |",
+        "| Revenus d'activité pluriannuels (gérant, libéral) | Années d'activité | Art. 163-0 A al. 2 |",
+        "| Prime ou bonus exceptionnel non récurrent | 4 | Sur acceptation administration |",
+        "| Gain levée d'options / AGA ante-mars 2012 | Variable | Régime fiscal spécifique |",
         "",
-        "## Procedure de declaration",
+        "## Procédure de déclaration",
         "",
-        "1. Incluez le revenu exceptionnel dans votre declaration 2042 (case correspondante)",
-        "2. Remplissez le formulaire **2042 C** — rubrique 'Revenus exceptionnels ou differes'",
+        "1. Incluez le revenu exceptionnel dans votre déclaration 2042 (case correspondante)",
+        "2. Remplissez le formulaire **2042 C** — rubrique 'Revenus exceptionnels ou différés'",
         "3. Indiquez le montant du revenu exceptionnel et le coefficient N retenu",
         "4. L'administration recalcule l'IR avec le quotient automatiquement",
         "",
@@ -10723,7 +11100,7 @@ def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
 
 
 def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
-    """Compare PFU 30% et bareme progressif pour revenus du capital."""
+    """Compare PFU 30% et barème progressif pour revenus du capital."""
     type_revenu = args.get("type_revenu", "dividendes")
     montant = float(args["montant"])
     rni_autres = float(args.get("rni_autres_revenus", 0))
@@ -10754,17 +11131,17 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
 
     tmi = calculer_ir(rni_autres + base_ir_bareme, nb_parts)["taux_marginal"]
     difference = tax_pfu - tax_bareme
-    meilleure = "PFU (flat tax 30%)" if difference < 0 else "Bareme progressif"
+    meilleure = "PFU (flat tax 30%)" if difference < 0 else "Barème progressif"
     economie = abs(difference)
 
     LABELS = {
         "dividendes": "Dividendes",
-        "interets": "Interets et revenus assimiles",
-        "plus_values_mobilieres": "Plus-values mobilieres (compte-titres)",
+        "interets": "Intérêts et revenus assimilés",
+        "plus_values_mobilieres": "Plus-values mobilières (compte-titres)",
     }
 
     lines = [
-        "# PFU vs Bareme Progressif — Revenus du Capital",
+        "# PFU vs Barème Progressif — Revenus du Capital",
         "",
         f"**Type de revenu** : {LABELS.get(type_revenu, type_revenu)}",
         f"**Montant** : {montant:,.0f} EUR",
@@ -10773,42 +11150,42 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
         "",
         "## Comparaison",
         "",
-        "| Option | Base IR | IR | Prel. sociaux | Total | Taux effectif |",
+        "| Option | Base IR | IR | Prél. sociaux | Total | Taux effectif |",
         "|--------|---------|-----|--------------|-------|---------------|",
         f"| PFU (flat tax) | {montant:,.0f} EUR | {ir_pfu:,} EUR | {ps_pfu:,} EUR | {tax_pfu:,} EUR | 30.0% |",
-        f"| Bareme progressif | {base_ir_bareme:,.0f} EUR | {ir_supplementaire:,} EUR | {ps_bareme:,} EUR | {tax_bareme:,} EUR | {tax_bareme/montant*100:.1f}% |",
+        f"| Barème progressif | {base_ir_bareme:,.0f} EUR | {ir_supplementaire:,} EUR | {ps_bareme:,} EUR | {tax_bareme:,} EUR | {tax_bareme/montant*100 if montant > 0 else 0:.1f}% |",
         "",
         f"## Recommandation : **{meilleure}**",
-        f"Economie : **{economie:,} EUR** en faveur du {meilleure}",
+        f"Économie : **{economie:,} EUR** en faveur du {meilleure}",
         "",
     ]
 
     if type_revenu == "dividendes":
         lines += [
-            "Note dividendes (bareme) : abattement 40% applique. CSG deductible N+1 : "
-            f"{csg_ded:,} EUR (gain supplementaire ~{round(csg_ded * tmi / 100):,} EUR l'annee suivante).",
+            "Note dividendes (barème) : abattement 40% applique. CSG déductible N+1 : "
+            f"{csg_ded:,} EUR (gain supplémentaire ~{round(csg_ded * tmi / 100):,} EUR l'année suivante).",
             "",
         ]
 
     lines += [
         "## Seuils de bascule selon le TMI",
         "",
-        "| TMI | Dividendes | Interets / PV mobilieres |",
+        "| TMI | Dividendes | Intérêts / PV mobilières |",
         "|-----|-----------|--------------------------|",
-        "| 0 % | Bareme (17.2% seulement) | Bareme (17.2% seulement) |",
-        "| 11 % | Bareme (~23.8% effectif) | Bareme (~28.2% effectif) |",
+        "| 0 % | Barème (17.2% seulement) | Barème (17.2% seulement) |",
+        "| 11 % | Barème (~23.8% effectif) | Barème (~28.2% effectif) |",
         "| 30 % | PFU (30% vs ~35.2%) | PFU (30% vs ~47.2%) |",
         "| 41 % | PFU (30% vs ~43.8%) | PFU (30% vs ~58.2%) |",
         "",
-        "- **Dividendes** : bareme avantageux si TMI <= 11% (break-even theorique ~21% avec abatt. 40%)",
-        "- **Interets / PV** : bareme avantageux si TMI <= 11% (break-even a 12.8%)",
+        "- **Dividendes** : barème avantageux si TMI <= 11% (break-even théorique ~21% avec abatt. 40%)",
+        "- **Intérêts / PV** : barème avantageux si TMI <= 11% (break-even à 12.8%)",
         "",
-        "## Comment opter pour le bareme",
+        "## Comment opter pour le barème",
         "",
-        "- Cochez la case **2OP** dans votre declaration 2042",
-        "- L'option est globale : s'applique a tous vos revenus de capitaux mobiliers de l'annee",
-        "- Elle est irrevocable pour l'annee concernee",
-        "- A refaire chaque annee si pertinent",
+        "- Cochez la case **2OP** dans votre déclaration 2042",
+        "- L'option est globale : s'applique à tous vos revenus de capitaux mobiliers de l'année",
+        "- Elle est irrévocable pour l'année concernée",
+        "- A refaire chaque année si pertinent",
         "",
         "---",
         "*Sources : Art. 200 A, 158-3 CGI — BOFIP BOI-RPPM-RCM-20-20*",
@@ -10817,9 +11194,10 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
 
 
 def tool_simuler_lmnp(args: Dict) -> str:
-    """Simulation LMNP : micro-BIC vs reel avec amortissement batiment et mobilier."""
+    """Simulation LMNP : micro-BIC vs réel avec amortissement bâtiment et mobilier."""
     loyers = float(args["loyers_annuels_bruts"])
     val_bien = float(args.get("valeur_bien_hors_terrain", 0))
+    val_terrain = float(args.get("valeur_terrain", 0))
     val_mobilier = float(args.get("valeur_mobilier", 5000))
     charges = float(args.get("charges_annuelles", 0))
     interets = float(args.get("interets_emprunt_annuels", 0))
@@ -10832,8 +11210,13 @@ def tool_simuler_lmnp(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
     PS = 0.172
 
-    abatt_micro = 0.71 if type_loc == "tourisme_classe" else 0.50
-    seuil_micro = 188_700 if type_loc == "tourisme_classe" else 77_700
+    REGIMES_MICRO_BIC = {
+        "classique": (0.50, SEUIL_MICRO_SERVICES, "Location meublée longue durée (abatt. 50%)"),
+        "tourisme_classe": (0.50, SEUIL_MICRO_SERVICES, "Meublé de tourisme classé (abatt. 50%)"),
+        "tourisme_non_classe": (0.30, 15_000, "Meublé de tourisme non classé / Airbnb (abatt. 30%)"),
+    }
+    abatt_micro, seuil_micro, libelle_regime = REGIMES_MICRO_BIC.get(
+        type_loc, REGIMES_MICRO_BIC["classique"])
     micro_eligible = loyers <= seuil_micro
 
     # Micro-BIC
@@ -10841,50 +11224,50 @@ def tool_simuler_lmnp(args: Dict) -> str:
     ir_micro = round(calculer_ir(rni_autres + base_micro, nb_parts)["impot_net"] - calculer_ir(rni_autres, nb_parts)["impot_net"])
     ps_micro = round(base_micro * PS)
     tax_micro = ir_micro + ps_micro
-    net_micro = round(loyers - tax_micro)
-
-    # Reel simplifie
     amort_bien = round(val_bien / 40) if val_bien > 0 else 0
     amort_mobilier = round(val_mobilier / 7) if val_mobilier > 0 else 0
-    amort_total = amort_bien + amort_mobilier
+    amort_dotation = amort_bien + amort_mobilier
     charges_totales = charges + interets + tf
     benefice_avant_amort = loyers - charges_totales
-    benefice_reel = benefice_avant_amort - amort_total
+    amort_utilise = max(0, min(amort_dotation, benefice_avant_amort))
+    amort_reporte = amort_dotation - amort_utilise
+    benefice_reel = benefice_avant_amort - amort_utilise
 
-    if benefice_reel > 0:
+    net_micro = round(loyers - charges_totales - tax_micro)
+
+    if benefice_reel >= 0:
         ir_reel = round(calculer_ir(rni_autres + benefice_reel, nb_parts)["impot_net"] - calculer_ir(rni_autres, nb_parts)["impot_net"])
         ps_reel = round(benefice_reel * PS)
         tax_reel = ir_reel + ps_reel
-        net_reel = round(loyers - tax_reel)
         deficit_genere = 0
     else:
         ir_reel = 0
         ps_reel = 0
         tax_reel = 0
-        net_reel = round(loyers)
         deficit_genere = abs(benefice_reel)
+    net_reel = round(loyers - charges_totales - tax_reel)
 
     tmi = calculer_ir(rni_autres + base_micro, nb_parts)["taux_marginal"]
 
     lines = [
-        "# Simulation LMNP — Location Meublee Non Professionnelle",
+        "# Simulation LMNP — Location Meublée Non Professionnelle",
         "",
         f"**Loyers annuels bruts** : {loyers:,.0f} EUR",
-        f"**Type** : {'Meuble tourisme classe / VFT (abatt. 71%)' if type_loc == 'tourisme_classe' else 'Location meublee classique (abatt. 50%)'}",
+        f"**Type** : {libelle_regime}",
         f"**TMI** : {tmi:.0f}%",
         "",
-        "## Statut LMNP — Verification",
+        "## Statut LMNP — Vérification",
         "",
         "| Condition LMNP | Seuil | Statut |",
         "|---------------|-------|--------|",
-        f"| Recettes annuelles | < 23 000 EUR | {'A verifier — vous etes peut-etre LMP' if loyers >= 23000 else 'OK'} |",
-        f"| Recettes < 50% du RFR global | Depend du foyer | A verifier |",
+        f"| Recettes annuelles | < 23 000 EUR | {'A vérifier — vous êtes peut-être LMP' if loyers >= 23000 else 'OK'} |",
+        f"| Recettes < 50% du RFR global | Dépend du foyer | A vérifier |",
         "",
-        "Si recettes > 23 000 EUR ET > 50% du RFR : basculement en LMP (regime different, IS sur PV revente).",
+        "Si recettes > 23 000 EUR ET > 50% du RFR : basculement en LMP (régime différent, IS sur PV revente).",
         "",
-        "## Comparatif Micro-BIC vs Reel",
+        "## Comparatif Micro-BIC vs Réel",
         "",
-        "| Regime | Base imposable | IR | PS (17.2%) | Total taxes | Net encaisse |",
+        "| Régime | Base imposable | IR | PS (17.2%) | Total taxes | Net encaisse |",
         "|--------|---------------|-----|-----------|-------------|--------------|",
     ]
 
@@ -10893,73 +11276,95 @@ def tool_simuler_lmnp(args: Dict) -> str:
     else:
         lines.append(f"| Micro-BIC | Non applicable (CA {loyers:,.0f} > {seuil_micro:,} EUR) | — | — | — | — |")
 
-    if benefice_reel > 0:
-        lines.append(f"| Reel simplifie | {benefice_reel:,.0f} EUR | {ir_reel:,} EUR | {ps_reel:,} EUR | {tax_reel:,} EUR | {net_reel:,} EUR |")
+    if benefice_reel >= 0:
+        lines.append(f"| Réel simplifié | {benefice_reel:,.0f} EUR | {ir_reel:,} EUR | {ps_reel:,} EUR | {tax_reel:,} EUR | {net_reel:,} EUR |")
     else:
-        lines.append(f"| Reel simplifie | **Deficit {deficit_genere:,.0f} EUR** | 0 EUR | 0 EUR | 0 EUR | {net_reel:,} EUR + report deficit |")
+        lines.append(f"| Réel simplifié | **Déficit {deficit_genere:,.0f} EUR** | 0 EUR | 0 EUR | 0 EUR | {net_reel:,} EUR + report déficit |")
+    lines += [
+        "",
+        "Net encaisse = loyers - charges réellement payées - impôts, pour les deux régimes.",
+    ]
 
-    lines += ["", "## Detail du regime reel", ""]
+    lines += ["", "## Détail du régime réel", ""]
 
-    if charges_totales > 0 or amort_total > 0:
+    if charges_totales > 0 or amort_dotation > 0:
         lines += [
-            "### Charges deductibles",
+            "### Charges déductibles",
             "| Poste | Montant |",
             "|-------|---------|",
             f"| Charges courantes (copro, assurance, gestion) | {charges:,.0f} EUR |",
-            f"| Interets d'emprunt | {interets:,.0f} EUR |",
-            f"| Taxe fonciere | {tf:,.0f} EUR |",
+            f"| Intérêts d'emprunt | {interets:,.0f} EUR |",
+            f"| Taxe foncière | {tf:,.0f} EUR |",
             f"| **Total charges** | **{charges_totales:,.0f} EUR** |",
             "",
             "### Amortissements",
-            "| Actif | Valeur | Duree | Dotation annuelle |",
+            "| Actif | Valeur | Durée | Dotation annuelle |",
             "|-------|--------|-------|-------------------|",
         ]
         if val_bien > 0:
-            lines.append(f"| Batiment (hors terrain) | {val_bien:,.0f} EUR | 40 ans | {amort_bien:,} EUR/an |")
+            lines.append(f"| Bâtiment (hors terrain) | {val_bien:,.0f} EUR | 40 ans | {amort_bien:,} EUR/an |")
+        if val_terrain > 0:
+            lines.append(f"| Terrain (non amortissable) | {val_terrain:,.0f} EUR | — | 0 EUR/an |")
         if val_mobilier > 0:
-            lines.append(f"| Mobilier / equipements | {val_mobilier:,.0f} EUR | 7 ans | {amort_mobilier:,} EUR/an |")
+            lines.append(f"| Mobilier / équipements | {val_mobilier:,.0f} EUR | 7 ans | {amort_mobilier:,} EUR/an |")
         lines += [
-            f"| **Total amortissements** | | | **{amort_total:,} EUR/an** |",
+            f"| **Dotation annuelle totale** | | | **{amort_dotation:,} EUR/an** |",
             "",
             f"Loyers                         : {loyers:,.0f} EUR",
             f"- Charges                      : -{charges_totales:,.0f} EUR",
-            f"- Amortissements               : -{amort_total:,.0f} EUR",
-            f"= Resultat imposable           : {benefice_reel:,.0f} EUR" + (" (DEFICIT — report 10 ans sur BIC meublés)" if benefice_reel < 0 else ""),
+            f"= Résultat avant amortissement : {benefice_avant_amort:,.0f} EUR",
+            f"- Amortissement imputé         : -{amort_utilise:,.0f} EUR",
+            f"= Résultat imposable           : {benefice_reel:,.0f} EUR" + (" (DÉFICIT issu des charges — report 10 ans sur BIC meublés)" if benefice_reel < 0 else ""),
             "",
         ]
+        if amort_reporte > 0:
+            lines += [
+                f"L'amortissement ne peut pas creer de déficit (art. 39 C II CGI) : {amort_reporte:,.0f} EUR",
+                "de dotation sont reportés sans limite de durée sur les bénéfices futurs de la même activité.",
+                "",
+            ]
 
     lines += [
-        "## Particularites du deficit LMNP",
-        "- Le deficit LMNP ne s'impute PAS sur le revenu global (contrairement a la location nue)",
-        "- Il est reportable 10 ans sur les benefices de location meublee non professionnelle du meme foyer",
-        "- Les amortissements non utilises (benefice = 0) sont mis en reserve pour annees futures",
+        "## Particularités du déficit LMNP",
+        "- Le déficit LMNP ne s'impute PAS sur le revenu global (contrairement à la location nue)",
+        "- Il est reportable 10 ans sur les bénéfices de location meublée non professionnelle du même foyer",
+        "- Les amortissements non imputés (plafonnés au bénéfice avant amortissement) sont reportables sans limite de durée",
         "",
-        "## LMNP a la revente",
-        "- Plus-value calculee sur regime immo (exonerations selon duree de detention)",
-        "- Les amortissements deduits ne sont PAS reintegres dans la PV (avantage majeur vs LMP)",
-        "- Seule la difference prix vente - prix achat initial est taxee",
+        "## LMNP à la revente — réintégration des amortissements (LF 2025)",
+        "- Depuis la loi de finances 2025, les amortissements déduits pendant l'exploitation sont",
+        "  **retranchés du prix d'acquisition** pour le calcul de la plus-value immobilière.",
+        "- Conséquence : le régime réel ne permet plus de cumuler l'économie d'impôt annuelle et une",
+        "  plus-value calculée sur le prix d'achat initial. L'avantage devient un différé d'imposition.",
+        "- Les abattements pour durée de détention (exonération IR à 22 ans, PS à 30 ans) restent acquis.",
+        "- Exclusion : les logements en résidence services (étudiante, senior, EHPAD) échappent à la",
+        "  réintégration.",
+        f"- Sur la base de la dotation actuelle ({amort_dotation:,.0f} EUR/an), le stock réintégrable",
+        f"  atteindrait environ {amort_dotation * 10:,.0f} EUR après 10 ans et {amort_dotation * 20:,.0f} EUR après 20 ans.",
+        "- Chiffrez l'impact avec `calculer_pv_immobiliere` (type_bien = lmnp, amortissements_deduits).",
         "",
         "---",
         "*Sources : Art. 35, 50-0, 151 septies A CGI — BOI-BIC-CHAMP-40-20 (LMNP)*",
     ]
 
-    if micro_eligible and benefice_reel < 0:
-        lines.insert(-3, "## Recommandation : Regime reel")
-        lines.insert(-3, "Le reel genere un deficit grace aux amortissements — aucun impot cette annee. Le micro impose {:.0f} EUR.".format(tax_micro))
-    elif micro_eligible and tax_micro > tax_reel:
+    if micro_eligible and tax_micro > tax_reel:
         eco = tax_micro - tax_reel
-        lines.insert(-3, f"## Recommandation : Regime reel (economie {eco:,} EUR/an)")
-        lines.insert(-3, f"Charges + amortissements ({charges_totales + amort_total:,.0f} EUR) > abattement micro ({loyers * abatt_micro:,.0f} EUR).")
+        lines.insert(-3, f"## Recommandation : Régime réel (économie {eco:,} EUR/an)")
+        if benefice_reel < 0:
+            lines.insert(-3, f"Les charges ({charges_totales:,.0f} EUR) dépassent les loyers : déficit reportable 10 ans, aucun impôt cette année.")
+        elif benefice_reel == 0 and amort_utilise > 0:
+            lines.insert(-3, f"L'amortissement imputé ({amort_utilise:,.0f} EUR) absorbe la totalité du bénéfice : aucun impôt cette année.")
+        else:
+            lines.insert(-3, f"Charges + amortissements ({charges_totales + amort_dotation:,.0f} EUR) > abattement micro ({loyers * abatt_micro:,.0f} EUR).")
     elif micro_eligible:
         eco = tax_reel - tax_micro
-        lines.insert(-3, f"## Recommandation : Micro-BIC (economie {eco:,} EUR/an)")
-        lines.insert(-3, f"Abattement micro ({loyers * abatt_micro:,.0f} EUR) > charges + amortissements ({charges_totales + amort_total:,.0f} EUR). Plus simple, pas de comptabilite.")
+        lines.insert(-3, f"## Recommandation : Micro-BIC (économie {eco:,} EUR/an)")
+        lines.insert(-3, f"Abattement micro ({loyers * abatt_micro:,.0f} EUR) > charges + amortissements ({charges_totales + amort_dotation:,.0f} EUR). Plus simple, pas de comptabilité.")
 
     return "\n".join(lines)
 
 
 def tool_simuler_rachat_trimestres(args: Dict) -> str:
-    """Simulation rachat de trimestres retraite : cout, gain de pension, break-even."""
+    """Simulation rachat de trimestres retraite : coût, gain de pension, break-even."""
     nb_trim = max(1, int(args.get("nb_trimestres_racheter", 4)))
     salaire_brut = float(args["salaire_annuel_brut"])
     age = int(args["age_actuel"])
@@ -10969,7 +11374,6 @@ def tool_simuler_rachat_trimestres(args: Dict) -> str:
     tmi = float(args.get("tmi", 30))
     statut = args.get("statut_professionnel", "salarie")
 
-    PASS_2025 = 46_368
 
     # Trimestres requis selon annee naissance (reforme 2023)
     if annee_nais >= 1965:
@@ -10993,14 +11397,14 @@ def tool_simuler_rachat_trimestres(args: Dict) -> str:
     if option == "duree_et_taux":
         taux_trim *= 1.33
 
-    salaire_ref = min(salaire_brut, PASS_2025)
+    salaire_ref = min(salaire_brut, PASS_ANNEE_COURANTE)
     cout_par_trim = round(salaire_ref * taux_trim)
     cout_total = cout_par_trim * nb_trim
     economie_fiscale = round(cout_total * tmi / 100)
     cout_net = cout_total - economie_fiscale
 
     # Gain de pension estime (base regime general simplifie)
-    salaire_ref_mensuel = min(salaire_brut, PASS_2025) / 12
+    salaire_ref_mensuel = min(salaire_brut, PASS_ANNEE_COURANTE) / 12
     trim_apres = trim_actuels + nb_trim
     manquants_avant = max(0, n_requis - trim_actuels)
     manquants_apres = max(0, n_requis - trim_apres)
@@ -11015,34 +11419,34 @@ def tool_simuler_rachat_trimestres(args: Dict) -> str:
 
     lines = [
         "# Simulation Rachat de Trimestres Retraite",
-        "*(Art. L161-17-3 Code de la Securite Sociale)*",
+        "*(Art. L161-17-3 Code de la Sécurité Sociale)*",
         "",
-        "## Parametres",
+        "## Paramètres",
         "",
-        f"| Element | Valeur |",
+        f"| Élément | Valeur |",
         f"|---------|--------|",
         f"| Age actuel | {age} ans |",
-        f"| Trimestres valides | {trim_actuels} / {n_requis} requis |",
-        f"| Trimestres a racheter | {nb_trim} |",
-        f"| Option | {'Duree + taux de liquidation (plus cher)' if option == 'duree_et_taux' else 'Duree d assurance seulement'} |",
+        f"| Trimestres validés | {trim_actuels} / {n_requis} requis |",
+        f"| Trimestres à racheter | {nb_trim} |",
+        f"| Option | {'Durée + taux de liquidation (plus cher)' if option == 'duree_et_taux' else 'Durée d assurance seulement'} |",
         f"| Salaire brut annuel | {salaire_brut:,.0f} EUR (ref PASS : {salaire_ref:,.0f} EUR) |",
         "",
-        "## Cout du rachat",
+        "## Coût du rachat",
         "",
         f"| Poste | Montant |",
         f"|-------|---------|",
-        f"| Taux par trimestre (age {age} ans) | {taux_trim*100:.1f}% du salaire reference |",
-        f"| Cout par trimestre | {cout_par_trim:,} EUR |",
-        f"| Cout total ({nb_trim} trimestre(s)) | {cout_total:,} EUR |",
-        f"| Economie fiscale ({tmi:.0f}% TMI — deductible {'IR case 6DD' if statut == 'salarie' else 'cotisations TNS'}) | -{economie_fiscale:,} EUR |",
-        f"| **Cout net d'impot** | **{cout_net:,} EUR** |",
+        f"| Taux par trimestre (age {age} ans) | {taux_trim*100:.1f}% du salaire référence |",
+        f"| Coût par trimestre | {cout_par_trim:,} EUR |",
+        f"| Coût total ({nb_trim} trimestre(s)) | {cout_total:,} EUR |",
+        f"| Économie fiscale ({tmi:.0f}% TMI — déductible {'IR case 6DD' if statut == 'salarie' else 'cotisations TNS'}) | -{economie_fiscale:,} EUR |",
+        f"| **Coût net d'impôt** | **{cout_net:,} EUR** |",
         "",
-        "## Gain de pension estime (regime general)",
+        "## Gain de pension estimé (régime général)",
         "",
-        "| Scenario | Trimestres | Decote | Pension base /mois |",
+        "| Scénario | Trimestres | Décote | Pension base /mois |",
         "|----------|-----------|--------|-------------------|",
         f"| Avant rachat | {trim_actuels} | {decote_avant*100:.2f}% | {pension_avant:,.0f} EUR |",
-        f"| Apres rachat | {trim_apres} | {decote_apres*100:.2f}% | {pension_apres:,.0f} EUR |",
+        f"| Après rachat | {trim_apres} | {decote_apres*100:.2f}% | {pension_apres:,.0f} EUR |",
         f"| **Gain mensuel** | | | **{gain_mensuel:,} EUR/mois** |",
         "",
     ]
@@ -11050,50 +11454,50 @@ def tool_simuler_rachat_trimestres(args: Dict) -> str:
     if gain_mensuel > 0 and mois_be is not None:
         ans_be = mois_be / 12
         lines += [
-            "## Rentabilite",
+            "## Rentabilité",
             "",
-            f"- Point de break-even : **{mois_be} mois ({ans_be:.1f} ans) apres la retraite**",
+            f"- Point de break-even : **{mois_be} mois ({ans_be:.1f} ans) après la retraite**",
             f"- Gain annuel brut : {gain_mensuel * 12:,} EUR/an",
         ]
         if ans_be <= 10:
-            lines.append("Rentabilite tres bonne : break-even < 10 ans.")
+            lines.append("Rentabilité très bonne : break-even < 10 ans.")
         elif ans_be <= 15:
-            lines.append("Rentabilite correcte : break-even entre 10 et 15 ans.")
+            lines.append("Rentabilité correcte : break-even entre 10 et 15 ans.")
         else:
-            lines.append("Rentabilite faible : break-even > 15 ans. A peser selon l'esperance de vie.")
+            lines.append("Rentabilité faible : break-even > 15 ans. A peser selon l'espérance de vie.")
         lines.append("")
     else:
-        lines += ["Le rachat n'ameliore pas la pension (trimestres deja au maximum ou taux plein atteint).", ""]
+        lines += ["Le rachat n'améliore pas la pension (trimestres déjà au maximum ou taux plein atteint).", ""]
 
     lines += [
         "## Types de trimestres rachetables",
         "",
         "| Type | Maximum | Condition principale |",
         "|------|---------|---------------------|",
-        "| Annees a faible cotisation (< 4 trim.) | Sans limite | Annees anterieures incompletes |",
-        "| Etudes superieures (diplome bac+2 ou plus) | 12 trimestres | Dans les 10 ans apres fin etudes |",
-        "| Stages conventionnes | 4 trimestres | Pendant les etudes |",
+        "| Années à faible cotisation (< 4 trim.) | Sans limite | Années antérieures incomplètes |",
+        "| Études supérieures (diplôme bac+2 ou plus) | 12 trimestres | Dans les 10 ans après fin études |",
+        "| Stages conventionnés | 4 trimestres | Pendant les études |",
         "",
-        "## Deductibilite fiscale",
+        "## Déductibilité fiscale",
         "",
-        "| Statut | Mode de deduction | Plafond |",
+        "| Statut | Mode de déduction | Plafond |",
         "|--------|------------------|---------|",
-        "| Salarie | Case 6DD — revenu imposable | Dans l'enveloppe PER |",
-        "| TNS / independant | Cotisations sociales deductibles | Plafond Madelin/PER |",
-        "| Fonctionnaire | Non deductible | — |",
+        "| Salarié | Case 6DD — revenu imposable | Dans l'enveloppe PER |",
+        "| TNS / indépendant | Cotisations sociales déductibles | Plafond Madelin/PER |",
+        "| Fonctionnaire | Non déductible | — |",
         "",
-        f"Note : le rachat est irreversible. Verifier le releve de carriere sur info-retraite.fr avant tout versement.",
-        f"Comparer avec un versement PER equivalent : meme economie fiscale, plus de flexibilite a la sortie.",
+        f"Note : le rachat est irréversible. Vérifier le relevé de carrière sur info-retraite.fr avant tout versement.",
+        f"Comparer avec un versement PER équivalent : même économie fiscale, plus de flexibilité à la sortie.",
         "",
         "---",
-        f"*Tarifs indicatifs — CNAV 2025 — PASS 2025 : {PASS_2025:,} EUR*",
+        f"*Tarifs indicatifs — CNAV {ANNEE_DECLARATION} — PASS {ANNEE_DECLARATION} : {PASS_ANNEE_COURANTE:,} EUR*",
         "*Sources : Art. L161-17-3 CSS — Circ. CNAV — info-retraite.fr*",
     ]
     return "\n".join(lines)
 
 
 def tool_calculer_exit_tax(args: Dict) -> str:
-    """Exit tax (art. 167 bis CGI) : imposition des PV latentes lors du depart de France."""
+    """Exit tax (art. 167 bis CGI) : imposition des PV latentes lors du départ de France."""
     pv_latentes = float(args.get("plus_values_latentes_total", 0))
     rni_autres = float(args.get("rni_autres_revenus", 0))
     situation = args.get("situation_famille", "celibataire")
@@ -11109,14 +11513,14 @@ def tool_calculer_exit_tax(args: Dict) -> str:
     applicable = pv_latentes >= SEUIL and annees_res >= 6
 
     lines = [
-        "# Exit Tax — Depart de France",
+        "# Exit Tax — Départ de France",
         "*(Art. 167 bis CGI)*",
         "",
-        "## Conditions de declenchement",
+        "## Conditions de déclenchement",
         "",
         "| Condition | Requis | Situation |",
         "|-----------|--------|-----------|",
-        f"| Residence fiscale en France (10 dernieres annees) | >= 6 ans | {annees_res} an(s) — {'OK' if annees_res >= 6 else 'Non applicable'} |",
+        f"| Résidence fiscale en France (10 dernières années) | >= 6 ans | {annees_res} an(s) — {'OK' if annees_res >= 6 else 'Non applicable'} |",
         f"| Plus-values latentes nettes | > 800 000 EUR | {pv_latentes:,.0f} EUR — {'Declenche' if pv_latentes >= SEUIL else 'Sous le seuil'} |",
         "",
     ]
@@ -11126,7 +11530,7 @@ def tool_calculer_exit_tax(args: Dict) -> str:
             "**Exit tax non applicable** dans votre situation.",
             "",
             "- Si vos PV latentes progressent : surveiller le seuil de 800 000 EUR",
-            "- Autre declencheur possible : titres representant > 50% du benefice d'une societe",
+            "- Autre déclencheur possible : titres représentant > 50% du bénéfice d'une société",
             "",
             "---",
             "*Art. 167 bis CGI — BOI-RPPM-PVBMI-50-10*",
@@ -11150,67 +11554,67 @@ def tool_calculer_exit_tax(args: Dict) -> str:
         "",
         f"| Composante | Taux | Montant |",
         f"|-----------|------|---------|",
-        f"| IR ({'bareme progressif' if option_bareme else 'PFU 12.8%'}) | {'variable' if option_bareme else '12.8%'} | {ir_exit:,} EUR |",
-        f"| Prelevement sociaux | 17.2% | {ps_exit:,} EUR |",
+        f"| IR ({'barème progressif' if option_bareme else 'PFU 12.8%'}) | {'variable' if option_bareme else '12.8%'} | {ir_exit:,} EUR |",
+        f"| Prélèvement sociaux | 17.2% | {ps_exit:,} EUR |",
         f"| **Exit tax totale** | {exit_tax/pv_latentes*100:.1f}% | **{exit_tax:,} EUR** |",
         "",
-        "## Regime de paiement",
+        "## Régime de paiement",
         "",
     ]
 
     if pays == "ue_eea":
         lines += [
-            "### Depart vers l'UE / EEE — Sursis automatique",
+            "### Départ vers l'UE / EEE — Sursis automatique",
             "",
-            "- Exit tax calculee et declaree, mais **paiement automatiquement differe**",
-            "- Degreve si retour en France dans les 5 ans",
-            "- Degreve si perte ou cession a perte apres le depart",
-            "- Degreve si les titres ont ete transmis a titre gratuit",
-            "- Obligation : declaration annuelle 2074-ETD de suivi des titres",
-            "- Le sursis prend fin lors de la cession effective des titres (impot du au taux de depart)",
+            "- Exit tax calculée et déclarée, mais **paiement automatiquement diffère**",
+            "- Dégrevé si retour en France dans les 5 ans",
+            "- Dégrevé si perte ou cession à perte après le départ",
+            "- Dégrevé si les titres ont été transmis à titre gratuit",
+            "- Obligation : déclaration annuelle 2074-ETD de suivi des titres",
+            "- Le sursis prend fin lors de la cession effective des titres (impôt du au taux de départ)",
             "",
         ]
     else:
         lines += [
-            "### Depart hors UE / EEE — Paiement immediat",
+            "### Départ hors UE / EEE — Paiement immédiat",
             "",
-            "- L'exit tax est exigible immediatement au depart",
-            "- Sursis sur demande possible : necessite une garantie (nantissement des titres)",
-            "- Si garantie accordee : paiement fractionne possible jusqu'a la cession (max 5 ans)",
-            "- Degreve si retour en France dans les 5 ans",
+            "- L'exit tax est exigible immédiatement au départ",
+            "- Sursis sur demande possible : nécessite une garantie (nantissement des titres)",
+            "- Si garantie accordée : paiement fractionné possible jusqu'à la cession (max 5 ans)",
+            "- Dégrevé si retour en France dans les 5 ans",
             "",
         ]
 
     lines += [
-        "## Actifs concernes et exoneres",
+        "## Actifs concernés et exonérés",
         "",
-        "| Actif | Concerne par l'exit tax |",
+        "| Actif | Concerné par l'exit tax |",
         "|-------|------------------------|",
-        "| Actions, obligations, titres de societes | Oui |",
+        "| Actions, obligations, titres de sociétés | Oui |",
         "| Parts de fonds (FCP, SICAV, FCT) | Oui |",
         "| PEA (plus-values latentes) | Oui |",
-        "| Contrats d'assurance-vie (unites de compte) | Oui |",
-        "| Residence principale | Non |",
-        "| Livret A, LDD, LEP, livrets reglementes | Non |",
-        "| Immobilier locatif | Non (regime PV immo applique lors de la cession) |",
+        "| Contrats d'assurance-vie (unités de compte) | Oui |",
+        "| Résidence principale | Non |",
+        "| Livret A, LDD, LEP, livrets réglementés | Non |",
+        "| Immobilier locatif | Non (régime PV immo applique lors de la cession) |",
         "",
-        "## Strategies pour minimiser avant le depart",
+        "## Stratégies pour minimiser avant le départ",
         "",
-        "- **Realiser des moins-values** avant le depart pour reduire les PV latentes nettes",
-        "- **Donner les titres** avant le depart : la PV latente n'est pas taxee a la donation",
-        "  (attention : le donataire reprend la valeur d'origine, pas le prix de marche)",
-        "- **Evaluer precisement** les PV latente par actif avec un avocat fiscaliste",
-        "- **Anticiper la declaration 2074-ETD** si depart vers UE/EEE",
+        "- **Réaliser des moins-values** avant le départ pour réduire les PV latentes nettes",
+        "- **Donner les titres** avant le départ : la PV latente n'est pas taxée à la donation",
+        "  (attention : le donataire reprend la valeur d'origine, pas le prix de marché)",
+        "- **Évaluer précisément** les PV latente par actif avec un avocat fiscaliste",
+        "- **Anticiper la déclaration 2074-ETD** si départ vers UE/EEE",
         "- **Passer sous le seuil** de 800 000 EUR si possible avant le changement de domicile",
         "",
         "---",
-        "*Sources : Art. 167 bis CGI — Loi de finances 2019 (reforme) — BOI-RPPM-PVBMI-50-10*",
+        "*Sources : Art. 167 bis CGI — Loi de finances 2019 (réforme) — BOI-RPPM-PVBMI-50-10*",
     ]
     return "\n".join(lines)
 
 
 def tool_guide_loc_avantages(args: Dict) -> str:
-    """Guide Loc'Avantages (art. 199 tricies CGI) : reduction d'impot 15% a 65% sur location abordable."""
+    """Guide Loc'Avantages (art. 199 tricies CGI) : réduction d'impôt 15% à 65% sur location abordable."""
     loyers = float(args.get("loyers_bruts_annuels", 0))
     niveau = args.get("niveau_convention", "intermediaire")
     surface = float(args.get("surface_m2", 0))
@@ -11222,15 +11626,15 @@ def tool_guide_loc_avantages(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     NIVEAUX = {
-        "intermediaire": {"label": "Intermediaire", "taux": 0.15, "minoration": 0.15, "desc": "Loyer <= marche - 15%"},
-        "social":        {"label": "Social",        "taux": 0.35, "minoration": 0.30, "desc": "Loyer <= marche - 30%"},
-        "tres_social":   {"label": "Tres social",   "taux": 0.65, "minoration": 0.45, "desc": "Loyer <= marche - 45%"},
-        "solidaire":     {"label": "Solidaire (via association agreee)", "taux": 0.65, "minoration": 0.45, "desc": "Sous-location solidaire"},
+        "intermediaire": {"label": "Intermediaire", "taux": 0.15, "minoration": 0.15, "desc": "Loyer <= marché - 15%"},
+        "social":        {"label": "Social",        "taux": 0.35, "minoration": 0.30, "desc": "Loyer <= marché - 30%"},
+        "tres_social":   {"label": "Très social",   "taux": 0.65, "minoration": 0.45, "desc": "Loyer <= marché - 45%"},
+        "solidaire":     {"label": "Solidaire (via association agréée)", "taux": 0.65, "minoration": 0.45, "desc": "Sous-location solidaire"},
     }
     ZONES = {
         "A_bis": ("Zone A bis — Paris et 76 communes", 18.0),
-        "A":     ("Zone A — IDF hors A bis, Cote d'Azur, Genevois", 13.5),
-        "B1":    ("Zone B1 — agglomerations > 250 000 hab.", 11.0),
+        "A":     ("Zone A — IDF hors A bis, Côte d'Azur, Genevois", 13.5),
+        "B1":    ("Zone B1 — agglomérations > 250 000 hab.", 11.0),
         "B2_C":  ("Zone B2 / C — autres communes", 8.5),
     }
 
@@ -11249,18 +11653,18 @@ def tool_guide_loc_avantages(args: Dict) -> str:
     gain = ir_sans - ir_avec
 
     lines = [
-        "# Loc'Avantages — Location a Loyer Abordable",
+        "# Loc'Avantages — Location à Loyer Abordable",
         "*(Art. 199 tricies CGI — Convention ANAH)*",
         "",
         "Loc'Avantages remplace le dispositif Pinel pour l'immobilier ancien.",
-        "Il offre une reduction d'IR de 15% a 65% en echange d'un loyer modere, via convention ANAH.",
+        "Il offre une réduction d'IR de 15% à 65% en echange d'un loyer modéré, via convention ANAH.",
         "",
         "## Convention choisie",
         "",
-        f"| Parametre | Valeur |",
+        f"| Paramètre | Valeur |",
         f"|-----------|--------|",
         f"| Niveau | {niv['label']} |",
-        f"| Reduction d'impot | {int(niv['taux']*100)}% des loyers bruts |",
+        f"| Réduction d'impôt | {int(niv['taux']*100)}% des loyers bruts |",
         f"| Engagement de loyer | {niv['desc']} |",
         f"| Zone | {zone_label} |",
         "",
@@ -11270,7 +11674,7 @@ def tool_guide_loc_avantages(args: Dict) -> str:
         lines += [
             "## Loyer plafond applicable",
             "",
-            f"| Zone | Loyer marche (m2/mois) | Reduction | Plafond Loc'Avantages (m2/mois) | Loyer annuel max ({surface:.0f} m2) |",
+            f"| Zone | Loyer marché (m2/mois) | Réduction | Plafond Loc'Avantages (m2/mois) | Loyer annuel max ({surface:.0f} m2) |",
             f"|------|-----------------------|-----------|--------------------------------|------------------------------------|",
             f"| {zone} | {loyer_marche_m2:.2f} EUR | -{int(niv['minoration']*100)}% | {loyer_plafond_m2:.2f} EUR | {loyer_plafond_an:,.0f} EUR/an |",
             "",
@@ -11283,13 +11687,13 @@ def tool_guide_loc_avantages(args: Dict) -> str:
             f"| Poste | Montant |",
             f"|-------|---------|",
             f"| Loyers bruts annuels | {loyers:,.0f} EUR |",
-            f"| Reduction d'impot calculee ({int(niv['taux']*100)}%) | {reduction:,.0f} EUR |",
+            f"| Réduction d'impôt calculée ({int(niv['taux']*100)}%) | {reduction:,.0f} EUR |",
         ]
         if reduction > 10_000:
-            lines.append(f"| Reduction apres plafond niches fiscales (10 000 EUR) | {reduction_effective:,.0f} EUR |")
+            lines.append(f"| Réduction après plafond niches fiscales (10 000 EUR) | {reduction_effective:,.0f} EUR |")
         lines += [
-            f"| IR avant Loc'Avantages (estime) | {ir_sans:,.0f} EUR |",
-            f"| IR apres Loc'Avantages | {ir_avec:,.0f} EUR |",
+            f"| IR avant Loc'Avantages (estimé) | {ir_sans:,.0f} EUR |",
+            f"| IR après Loc'Avantages | {ir_avec:,.0f} EUR |",
             f"| **Gain fiscal annuel** | **{gain:,.0f} EUR** |",
             "",
         ]
@@ -11297,47 +11701,47 @@ def tool_guide_loc_avantages(args: Dict) -> str:
     lines += [
         "## Tableau comparatif des niveaux",
         "",
-        "| Niveau | Reduction IR | Minoration loyer | Plafonds locataire (celibataire zone B1) |",
+        "| Niveau | Réduction IR | Minoration loyer | Plafonds locataire (célibataire zone B1) |",
         "|--------|-------------|-----------------|----------------------------------------|",
-        "| Intermediaire | 15% | -15% | ~43 000 EUR de revenus annuels |",
+        "| Intermédiaire | 15% | -15% | ~43 000 EUR de revenus annuels |",
         "| Social | 35% | -30% | ~37 000 EUR de revenus annuels |",
-        "| Tres social | 65% | -45% | ~24 000 EUR de revenus annuels |",
-        "| Solidaire | 65% | -45% | Locataires en grande precarite |",
+        "| Très social | 65% | -45% | ~24 000 EUR de revenus annuels |",
+        "| Solidaire | 65% | -45% | Locataires en grande précarité |",
         "",
         "## Conditions",
         "",
-        "1. Logement loue **nu** (pas meuble), usage de residence principale du locataire",
-        "2. **Convention signee avec l'ANAH** (anah.fr) — delai environ 2 a 3 mois",
-        "3. **Duree minimum** : 6 ans (renouvelable — eligible 9 ans via ANAH Habiter Mieux)",
-        "4. **Loyer plafonne** selon la zone et le niveau de convention",
-        "5. **Locataire sous plafond de ressources** (revenus N-2 verifies par l'ANAH)",
-        "6. Logement conforme aux criteres de decence",
+        "1. Logement loue **nu** (pas meuble), usage de résidence principale du locataire",
+        "2. **Convention signée avec l'ANAH** (anah.fr) — délai environ 2 à 3 mois",
+        "3. **Durée minimum** : 6 ans (renouvelable — éligible 9 ans via ANAH Habiter Mieux)",
+        "4. **Loyer plafonné** selon la zone et le niveau de convention",
+        "5. **Locataire sous plafond de ressources** (revenus N-2 vérifiés par l'ANAH)",
+        "6. Logement conforme aux critères de décence",
         "",
         "## Avantages par rapport au Pinel (clos fin 2024)",
         "",
-        "- Applicable a **l'immobilier ancien** (pas seulement le neuf)",
-        "- Taux de reduction jusqu'a **65%** vs 9-21% pour le Pinel",
-        "- **Pas de plafond d'investissement specifique** (hors plafond global niches 10 000 EUR/an)",
-        "- Pas de contrainte geographique stricte comme le Pinel",
-        "- **Non soumis au bouclier fiscal specifique** des niches (mais soumis au plafond 10 000 EUR)",
+        "- Applicable à **l'immobilier ancien** (pas seulement le neuf)",
+        "- Taux de réduction jusqu'à **65%** vs 9-21% pour le Pinel",
+        "- **Pas de plafond d'investissement spécifique** (hors plafond global niches 10 000 EUR/an)",
+        "- Pas de contrainte géographique stricte comme le Pinel",
+        "- **Non soumis au bouclier fiscal spécifique** des niches (mais soumis au plafond 10 000 EUR)",
         "",
-        "## Demarches",
+        "## Démarches",
         "",
-        "1. Contacter l'ANAH (anah.fr) pour evaluer l'eligibilite du logement",
-        "2. Faire etablir un diagnostic energetique (DPE) si necessaire",
+        "1. Contacter l'ANAH (anah.fr) pour évaluer l'éligibilité du logement",
+        "2. Faire établir un diagnostic énergétique (DPE) si nécessaire",
         "3. Signer la convention ANAH",
-        "4. Declarer les loyers en revenus fonciers (formulaire 2044)",
-        "5. Reporter la reduction d'impot en 2042 (case dedicee Loc'Avantages)",
+        "4. Déclarer les loyers en revenus fonciers (formulaire 2044)",
+        "5. Reporter la réduction d'impôt en 2042 (case dédiée Loc'Avantages)",
         "",
         "---",
-        "*Sources : Art. 199 tricies CGI — Decret 2022-1626 — anah.fr*",
+        "*Sources : Art. 199 tricies CGI — Décret 2022-1626 — anah.fr*",
         "*Loc'Avantages est soumis au plafond global des niches fiscales de 10 000 EUR/an.*",
     ]
     return "\n".join(lines)
 
 
 def tool_simuler_micro_foncier(args: Dict) -> str:
-    """Compare micro-foncier (abattement 30%) et regime reel pour revenus locatifs nus."""
+    """Compare micro-foncier (abattement 30%) et régime réel pour revenus locatifs nus."""
     loyers = float(args["loyers_bruts_annuels"])
     interets = float(args.get("interets_emprunt", 0))
     charges_copro = float(args.get("charges_copropriete", 0))
@@ -11354,7 +11758,7 @@ def tool_simuler_micro_foncier(args: Dict) -> str:
     PS = 0.172
     SEUIL_MICRO = 15_000
     ABATT_MICRO = 0.30
-    PLAFOND_DEFICIT = 10_700   # doublé a 21 400 pour travaux énergétiques
+    PLAFOND_DEFICIT = DEFICIT_FONCIER_PLAFOND
 
     eligible_micro = loyers <= SEUIL_MICRO
 
@@ -11408,108 +11812,109 @@ def tool_simuler_micro_foncier(args: Dict) -> str:
     tmi = calculer_ir(rni_autres + base_micro, nb_parts)["taux_marginal"]
 
     lines = [
-        "# Micro-Foncier vs Regime Reel — Revenus Locatifs Nus",
+        "# Micro-Foncier vs Régime Réel — Revenus Locatifs Nus",
         "",
         f"**Loyers bruts annuels** : {loyers:,.0f} EUR",
         f"**TMI** : {tmi:.0f}%",
         "",
-        "## Eligibilite au micro-foncier",
+        "## Éligibilité au micro-foncier",
         "",
         f"| Condition | Seuil | Statut |",
         f"|-----------|-------|--------|",
-        f"| Loyers bruts annuels | <= 15 000 EUR | {'Eligible' if eligible_micro else 'Non eligible — reel obligatoire'} |",
-        "| Pas de regime special actif (Pinel, Malraux, MH...) | — | A verifier |",
-        "| Pas de parts de SCPI ou societes immobilieres | — | A verifier |",
+        f"| Loyers bruts annuels | <= 15 000 EUR | {'Eligible' if eligible_micro else 'Non éligible — réel obligatoire'} |",
+        "| Pas de régime spécial actif (Pinel, Malraux, MH...) | — | A vérifier |",
+        "| Pas de parts de SCPI ou sociétés immobilières | — | A vérifier |",
         "",
     ]
 
     if not eligible_micro:
         lines += [
-            f"Loyers ({loyers:,.0f} EUR) > seuil 15 000 EUR. Le regime reel est obligatoire.",
+            f"Loyers ({loyers:,.0f} EUR) > seuil 15 000 EUR. Le régime réel est obligatoire.",
             "",
         ]
 
     lines += [
         "## Comparatif",
         "",
-        "| Regime | Base imposable | IR | PS (17.2%) | Total taxes | Net annuel |",
+        "| Régime | Base imposable | IR | PS (17.2%) | Total taxes | Net annuel |",
         "|--------|---------------|-----|-----------|-------------|------------|",
     ]
     if eligible_micro:
         lines.append(f"| Micro-foncier (abatt. 30%) | {base_micro:,.0f} EUR | {ir_micro:,} EUR | {ps_micro:,} EUR | {tax_micro:,} EUR | {net_micro:,} EUR |")
 
     if benefice_net > 0:
-        lines.append(f"| Reel (charges {charges_totales:,.0f} EUR) | {benefice_net:,.0f} EUR | {ir_reel:,} EUR | {ps_reel:,} EUR | {tax_reel:,} EUR | {net_reel:,} EUR |")
+        lines.append(f"| Réel (charges {charges_totales:,.0f} EUR) | {benefice_net:,.0f} EUR | {ir_reel:,} EUR | {ps_reel:,} EUR | {tax_reel:,} EUR | {net_reel:,} EUR |")
     elif benefice_brut < 0:
-        lines.append(f"| Reel — Deficit {abs(benefice_brut):,.0f} EUR | — | gain {abs(ir_reel):,} EUR | 0 EUR | — | {net_reel:,} EUR |")
+        lines.append(f"| Réel — Déficit {abs(benefice_brut):,.0f} EUR | — | gain {abs(ir_reel):,} EUR | 0 EUR | — | {net_reel:,} EUR |")
     else:
-        lines.append(f"| Reel (benefice nul) | 0 EUR | 0 EUR | 0 EUR | 0 EUR | {loyers:,.0f} EUR |")
+        lines.append(f"| Réel (bénéfice nul) | 0 EUR | 0 EUR | 0 EUR | 0 EUR | {loyers:,.0f} EUR |")
 
     lines += [""]
 
     if charges_totales > 0:
         lines += [
-            "## Detail des charges reelles",
+            "## Détail des charges réelles",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
-            f"| Interets d'emprunt | {interets:,.0f} EUR |",
-            f"| Charges de copropriete | {charges_copro:,.0f} EUR |",
-            f"| Taxe fonciere | {tf:,.0f} EUR |",
-            f"| Travaux entretien / reparation | {travaux:,.0f} EUR |",
+            f"| Intérêts d'emprunt | {interets:,.0f} EUR |",
+            f"| Charges de copropriété | {charges_copro:,.0f} EUR |",
+            f"| Taxe foncière | {tf:,.0f} EUR |",
+            f"| Travaux entretien / réparation | {travaux:,.0f} EUR |",
             f"| Frais de gestion | {gestion:,.0f} EUR |",
             f"| Assurance PNO | {assurance:,.0f} EUR |",
             f"| **Total charges** | **{charges_totales:,.0f} EUR** |",
-            f"| Abattement micro equivalent | {loyers * ABATT_MICRO:,.0f} EUR (30%) |",
+            f"| Abattement micro équivalent | {loyers * ABATT_MICRO:,.0f} EUR (30%) |",
             "",
         ]
         if charges_totales > loyers * ABATT_MICRO or benefice_brut < 0:
-            lines.append(f"Charges reelles ({charges_totales:,.0f} EUR) > abattement micro ({loyers * ABATT_MICRO:,.0f} EUR) : le regime reel est plus avantageux.")
+            lines.append(f"Charges réelles ({charges_totales:,.0f} EUR) > abattement micro ({loyers * ABATT_MICRO:,.0f} EUR) : le régime réel est plus avantageux.")
         else:
             lines.append(f"Abattement micro ({loyers * ABATT_MICRO:,.0f} EUR) > charges ({charges_totales:,.0f} EUR) : le micro-foncier est plus avantageux.")
         lines.append("")
 
     if benefice_brut < 0:
         lines += [
-            "## Deficit foncier",
+            "## Déficit foncier",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
-            f"| Deficit total | {abs(benefice_brut):,.0f} EUR |",
-            f"| Dont interets d'emprunt (non imputable sur global) | {interets:,.0f} EUR |",
-            f"| Deficit hors interets | {max(0, abs(benefice_brut) - interets):,.0f} EUR |",
+            f"| Déficit total | {abs(benefice_brut):,.0f} EUR |",
+            f"| Dont intérêts d'emprunt (non imputable sur global) | {interets:,.0f} EUR |",
+            f"| Déficit hors intérêts | {max(0, abs(benefice_brut) - interets):,.0f} EUR |",
             f"| Plafond imputable sur revenu global | {PLAFOND_DEFICIT:,} EUR |",
-            f"| Impute sur revenu global cette annee | {deficit_imputable:,.0f} EUR |",
-            f"| Economie IR generee | {abs(ir_reel):,.0f} EUR |",
-            f"| Deficit reporte (BF futurs sur 10 ans) | {nouveau_deficit:,.0f} EUR |",
+            f"| Imputé sur revenu global cette année | {deficit_imputable:,.0f} EUR |",
+            f"| Économie IR générée | {abs(ir_reel):,.0f} EUR |",
+            f"| Déficit reporté (BF futurs sur 10 ans) | {nouveau_deficit:,.0f} EUR |",
             "",
-            "Note : le plafond passe a 21 400 EUR/an pour travaux de renovation energetique (DPE F/G, 2023-2025).",
+            f"Note : le rehaussement à {DEFICIT_FONCIER_PLAFOND_ENERGETIQUE:,} EUR/an pour travaux de rénovation énergétique",
+            f"(sortie de passoire F/G) ne visait que les dépenses payées jusqu'au {DEFICIT_FONCIER_ENERGETIQUE_FIN}. Il est éteint.",
             "",
         ]
 
     if deficits_ante > 0:
         lines += [
-            f"Deficits anterieurs : {deficits_ante:,.0f} EUR. Restant apres imputation : {deficit_reste:,.0f} EUR.",
+            f"Déficits antérieurs : {deficits_ante:,.0f} EUR. Restant après imputation : {deficit_reste:,.0f} EUR.",
             "",
         ]
 
     lines += [
-        "## Regles essentielles",
+        "## Règles essentielles",
         "",
-        "- Option reel irrevocable 3 ans : si vous choisissez le reel, pas de retour micro pendant 3 ans",
-        "- Le deficit foncier hors interets s'impute sur le revenu global (plafond 10 700 EUR/an)",
-        "- Les interets d'emprunt en deficit restent reportables 10 ans sur les revenus fonciers uniquement",
-        "- En micro-foncier : impossible de creer un deficit, impossible de deduire les travaux importants",
+        "- Option réel irrévocable 3 ans : si vous choisissez le réel, pas de retour micro pendant 3 ans",
+        "- Le déficit foncier hors intérêts s'impute sur le revenu global (plafond 10 700 EUR/an)",
+        "- Les intérêts d'emprunt en déficit restent reportables 10 ans sur les revenus fonciers uniquement",
+        "- En micro-foncier : impossible de creer un déficit, impossible de déduire les travaux importants",
         "",
-        "## Charges deductibles au reel",
+        "## Charges déductibles au réel",
         "",
-        "- Interets et frais d'emprunt (acquisition, travaux, assurance emprunteur)",
-        "- Charges de copropriete non recuperees sur le locataire",
-        "- Taxe fonciere (hors TEOM si remboursee par le locataire)",
-        "- Travaux de reparation, d'entretien et d'amelioration (pas construction ni agrandissement)",
+        "- Intérêts et frais d'emprunt (acquisition, travaux, assurance emprunteur)",
+        "- Charges de copropriété non récupérées sur le locataire",
+        "- Taxe foncière (hors TEOM si remboursée par le locataire)",
+        "- Travaux de réparation, d'entretien et d'amélioration (pas construction ni agrandissement)",
         "- Frais de gestion locative (agence, syndic, administrateur)",
-        "- Primes assurance PNO, loyers impayes",
-        "- Frais de procedure (contentieux locatif)",
+        "- Primes assurance PNO, loyers impayés",
+        "- Frais de procédure (contentieux locatif)",
         "- Diagnostics obligatoires (DPE, amiante, plomb...)",
         "",
         "---",
@@ -11521,7 +11926,7 @@ def tool_simuler_micro_foncier(args: Dict) -> str:
 # ─── Diagnostic passage freelance ────────────────────────────────────────────
 
 def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
-    """Diagnostic personnalise : est-il pertinent de passer freelance plutot que de rester en CDI/CDD ?"""
+    """Diagnostic personnalisé : est-il pertinent de passer freelance plutôt que de rester en CDI/CDD ?"""
     salaire_brut_cdi = float(args.get("salaire_brut_annuel_cdi", 0))
     secteur = args.get("secteur", "it_dev")
     anciennete_ans = int(args.get("anciennete_ans", 5))
@@ -11540,12 +11945,12 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
     # ── Donnees sectorielles ──────────────────────────────────────────────────
     SECTEURS = {
         "it_dev": {
-            "label": "Developpement / DevOps / Securite informatique",
+            "label": "Développement / DevOps / Sécurité informatique",
             "demande": 5,
             "tjm_median": 550,
             "tjm_senior": 750,
             "risque_metier": "faible",
-            "note": "Marche en tension structurelle. Tres forte demande de profils autonomes.",
+            "note": "Marché en tension structurelle. Très forte demande de profils autonomes.",
         },
         "it_conseil_data": {
             "label": "Conseil IT / Data / Cloud / Architecture",
@@ -11553,15 +11958,15 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
             "tjm_median": 600,
             "tjm_senior": 850,
             "risque_metier": "faible",
-            "note": "Cloud, IA, data : demande soutenue. TJM eleves des 5 ans d'experience.",
+            "note": "Cloud, IA, data : demande soutenue. TJM élevés des 5 ans d'expérience.",
         },
         "conseil_management": {
-            "label": "Conseil en management / strategie / organisation",
+            "label": "Conseil en management / stratégie / organisation",
             "demande": 4,
             "tjm_median": 800,
             "tjm_senior": 1_200,
             "risque_metier": "moyen",
-            "note": "Marche porteur pour les profils experimentes (> 8 ans). Reseau indispensable.",
+            "note": "Marché porteur pour les profils expérimentés (> 8 ans). Réseau indispensable.",
         },
         "marketing_communication": {
             "label": "Marketing / Communication / Design",
@@ -11569,7 +11974,7 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
             "tjm_median": 350,
             "tjm_senior": 550,
             "risque_metier": "moyen",
-            "note": "Concurrence elevee. Specialisation (SEO, performance, UX) augmente le TJM.",
+            "note": "Concurrence élevée. Spécialisation (SEO, performance, UX) augmente le TJM.",
         },
         "juridique_rh": {
             "label": "Juridique / RH / Paie / Compliance",
@@ -11577,23 +11982,23 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
             "tjm_median": 450,
             "tjm_senior": 700,
             "risque_metier": "moyen",
-            "note": "Demande stable. Niche en compliance RGPD/ESG valorisee.",
+            "note": "Demande stable. Niche en compliance RGPD/ESG valorisée.",
         },
         "btp_artisanat": {
-            "label": "BTP / Artisanat / Metiers du batiment",
+            "label": "BTP / Artisanat / Métiers du bâtiment",
             "demande": 4,
             "tjm_median": 300,
             "tjm_senior": 500,
             "risque_metier": "moyen",
-            "note": "Penurie de mains-d'oeuvre qualifiees. Sous-traitance directe frequente.",
+            "note": "Pénurie de mains-d'oeuvre qualifiées. Sous-traitance directe fréquente.",
         },
         "sante_paramedical": {
-            "label": "Sante / Paramedical / Bien-etre",
+            "label": "Santé / Paramédical / Bien-être",
             "demande": 4,
             "tjm_median": 400,
             "tjm_senior": 600,
             "risque_metier": "faible",
-            "note": "Liberaux de sante : modele independant historique. Revenus stables.",
+            "note": "Libéraux de santé : modèle indépendant historique. Revenus stables.",
         },
         "formation_coaching": {
             "label": "Formation / Coaching / Conseil RH",
@@ -11601,7 +12006,7 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
             "tjm_median": 500,
             "tjm_senior": 800,
             "risque_metier": "eleve",
-            "note": "Marche sature en generalist. Expertise sectorielle ou technique differenciante requise.",
+            "note": "Marché saturé en généraliste. Expertise sectorielle ou technique différenciante requise.",
         },
         "commerce_vente": {
             "label": "Commerce / Vente / Business Development",
@@ -11609,7 +12014,7 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
             "tjm_median": 300,
             "tjm_senior": 450,
             "risque_metier": "eleve",
-            "note": "Variable incontournable. Revenus irreguliers. Reseau determinant.",
+            "note": "Variable incontournable. Revenus irréguliers. Réseau déterminant.",
         },
         "autre": {
             "label": "Autre secteur",
@@ -11617,21 +12022,22 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
             "tjm_median": 350,
             "tjm_senior": 550,
             "risque_metier": "moyen",
-            "note": "Evaluer la demande locale et sectorielle avant de se lancer.",
+            "note": "Évaluer la demande locale et sectorielle avant de se lancer.",
         },
     }
     sect = SECTEURS.get(secteur, SECTEURS["autre"])
 
     ACTIVITES_PARAMS = {
-        "services_bnc": {"taux_ae_cotis": 0.231, "abatt_ae_ir": 0.34, "seuil_ae": 77_700},
-        "services_bic": {"taux_ae_cotis": 0.214, "abatt_ae_ir": 0.50, "seuil_ae": 77_700},
-        "vente_marchandises": {"taux_ae_cotis": 0.128, "abatt_ae_ir": 0.71, "seuil_ae": 188_700},
+        "services_bnc": {"taux_ae_cotis": COTISATIONS_AE_BNC, "abatt_ae_ir": 0.34, "seuil_ae": SEUIL_MICRO_SERVICES},
+        "services_bnc_cipav": {"taux_ae_cotis": COTISATIONS_AE_BNC_CIPAV, "abatt_ae_ir": 0.34, "seuil_ae": SEUIL_MICRO_SERVICES},
+        "services_bic": {"taux_ae_cotis": COTISATIONS_AE_SERVICES_BIC, "abatt_ae_ir": 0.50, "seuil_ae": SEUIL_MICRO_SERVICES},
+        "vente_marchandises": {"taux_ae_cotis": COTISATIONS_AE_VENTE, "abatt_ae_ir": 0.71, "seuil_ae": SEUIL_MICRO_VENTE},
     }
     act = ACTIVITES_PARAMS.get(type_activite, ACTIVITES_PARAMS["services_bnc"])
 
     # ── Net CDI de reference ──────────────────────────────────────────────────
     net_salarie_cdi = salaire_brut_cdi * 0.78
-    abatt_cdi = min(14_426, max(495, net_salarie_cdi * 0.10))
+    abatt_cdi = abattement_frais_pro(net_salarie_cdi)
     rni_cdi = max(0, net_salarie_cdi - abatt_cdi)
     ir_cdi = calculer_ir(rni_cdi, nb_parts)["impot_net"]
     net_cdi = round(net_salarie_cdi - ir_cdi)
@@ -11639,17 +12045,16 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
 
     # ── TJM minimum pour egaliser le CDI (SASU comme reference principale) ────
     def tjm_equiv_sasu(net_ref: float) -> int:
-        SMIC_BRUT = 21_622
         lo, hi = 0.0, 10_000.0
         for _ in range(60):
             mid = (lo + hi) / 2
             ca = mid * jours
-            cout_sal = SMIC_BRUT * 1.55
+            cout_sal = SMIC_BRUT_ANNUEL * 1.55
             is_base = max(0, ca - cout_sal)
             is_tot = min(is_base, 42_500) * 0.15 + max(0, is_base - 42_500) * 0.25
             div_net = max(0, is_base - is_tot) * 0.70
-            net_smic = SMIC_BRUT * 0.77
-            ir_s = calculer_ir(max(0, net_smic - min(14_426, max(495, net_smic * 0.10))), nb_parts)["impot_net"]
+            net_smic = SMIC_BRUT_ANNUEL * 0.77
+            ir_s = calculer_ir(max(0, net_smic - abattement_frais_pro(net_smic)), nb_parts)["impot_net"]
             net = net_smic - ir_s + div_net
             if net < net_ref:
                 lo = mid
@@ -11666,13 +12071,12 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
     ca_vise = tjm_calcul * jours
 
     # Simulation SASU
-    SMIC_BRUT = 21_622
-    cout_sal_sasu = round(SMIC_BRUT * 1.55)
-    net_smic_sasu = round(SMIC_BRUT * 0.77)
+    cout_sal_sasu = round(SMIC_BRUT_ANNUEL * 1.55)
+    net_smic_sasu = round(SMIC_BRUT_ANNUEL * 0.77)
     is_base_sasu = max(0, ca_vise - cout_sal_sasu)
     is_tot_sasu = round(min(is_base_sasu, 42_500) * 0.15 + max(0, is_base_sasu - 42_500) * 0.25)
     div_nets_sasu = round(max(0, is_base_sasu - is_tot_sasu) * 0.70)
-    ir_smic_sasu = round(calculer_ir(max(0, net_smic_sasu - min(14_426, max(495, net_smic_sasu * 0.10))), nb_parts)["impot_net"])
+    ir_smic_sasu = round(calculer_ir(max(0, net_smic_sasu - abattement_frais_pro(net_smic_sasu)), nb_parts)["impot_net"])
     net_freelance_sasu = net_smic_sasu - ir_smic_sasu + div_nets_sasu
 
     # Simulation AE (si dans les seuils)
@@ -11695,44 +12099,44 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
 
     # 1. Epargne (0-3)
     if mois_buffer >= 12:
-        pts = 3; detail = f"Epargne >= 12 mois ({mois_buffer:.1f} mois) — tres solide"
+        pts = 3; detail = f"Épargne >= 12 mois ({mois_buffer:.1f} mois) — très solide"
     elif mois_buffer >= 6:
-        pts = 2; detail = f"Epargne 6-12 mois ({mois_buffer:.1f} mois) — suffisante"
+        pts = 2; detail = f"Épargne 6-12 mois ({mois_buffer:.1f} mois) — suffisante"
     elif mois_buffer >= 3:
-        pts = 1; detail = f"Epargne 3-6 mois ({mois_buffer:.1f} mois) — limite, a renforcer"
+        pts = 1; detail = f"Épargne 3-6 mois ({mois_buffer:.1f} mois) — limite, à renforcer"
     else:
-        pts = 0; detail = f"Epargne < 3 mois ({mois_buffer:.1f} mois) — insuffisante"
+        pts = 0; detail = f"Épargne < 3 mois ({mois_buffer:.1f} mois) — insuffisante"
     score += pts
-    details_score.append((f"Epargne de securite", pts, 3, detail))
+    details_score.append((f"Épargne de sécurité", pts, 3, detail))
 
     # 2. Experience (0-2)
     if anciennete_ans >= 8:
-        pts = 2; detail = f"{anciennete_ans} ans d'experience — profil senior, TJM eleve justifie"
+        pts = 2; detail = f"{anciennete_ans} ans d'expérience — profil senior, TJM élevé justifié"
     elif anciennete_ans >= 3:
-        pts = 1; detail = f"{anciennete_ans} ans d'experience — suffisant pour se lancer"
+        pts = 1; detail = f"{anciennete_ans} ans d'expérience — suffisant pour se lancer"
     else:
-        pts = 0; detail = f"{anciennete_ans} an(s) — experience limitee, risque de sous-facturation"
+        pts = 0; detail = f"{anciennete_ans} an(s) — expérience limitée, risque de sous-facturation"
     score += pts
-    details_score.append(("Experience professionnelle", pts, 2, detail))
+    details_score.append(("Expérience professionnelle", pts, 2, detail))
 
     # 3. Reseau / clients potentiels (0-2)
     if clients_potentiels:
-        pts = 2; detail = "Reseau / mission en vue — demarrage sans periode blanche probable"
+        pts = 2; detail = "Réseau / mission en vue — démarrage sans période blanche probable"
     else:
-        pts = 0; detail = "Pas de prospect identifie — periode de demarrage a anticiper (2-6 mois)"
+        pts = 0; detail = "Pas de prospect identifié — période de démarrage à anticiper (2-6 mois)"
     score += pts
-    details_score.append(("Reseau et prospects", pts, 2, detail))
+    details_score.append(("Réseau et prospects", pts, 2, detail))
 
     # 4. Demande sectorielle (0-2)
     d = sect["demande"]
     if d >= 5:
-        pts = 2; detail = f"Demande tres forte ({sect['label']})"
+        pts = 2; detail = f"Demande très forte ({sect['label']})"
     elif d >= 4:
         pts = 2; detail = f"Demande forte ({sect['label']})"
     elif d >= 3:
-        pts = 1; detail = f"Demande moderee ({sect['label']})"
+        pts = 1; detail = f"Demande modérée ({sect['label']})"
     else:
-        pts = 0; detail = f"Demande faible ({sect['label']}) — niche ou reinvention necessaire"
+        pts = 0; detail = f"Demande faible ({sect['label']}) — niche ou réinvention nécessaire"
     score += pts
     details_score.append(("Demande sectorielle", pts, 2, detail))
 
@@ -11740,24 +12144,24 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
     if gain_pct_sasu >= 20:
         pts = 2; detail = f"Gain net potentiel : +{gain_pct_sasu:.1f} % par rapport au CDI"
     elif gain_pct_sasu >= 5:
-        pts = 1; detail = f"Gain net modere : +{gain_pct_sasu:.1f} % par rapport au CDI"
+        pts = 1; detail = f"Gain net modéré : +{gain_pct_sasu:.1f} % par rapport au CDI"
     elif gain_pct_sasu >= 0:
-        pts = 1; detail = f"Gain marginal : +{gain_pct_sasu:.1f} % — interet surtout non financier"
+        pts = 1; detail = f"Gain marginal : +{gain_pct_sasu:.1f} % — intérêt surtout non financier"
     else:
-        pts = 0; detail = f"Gain negatif au TJM cible ({tjm_calcul:.0f} EUR/j) : {gain_pct_sasu:.1f} % vs CDI"
+        pts = 0; detail = f"Gain négatif au TJM cible ({tjm_calcul:.0f} EUR/j) : {gain_pct_sasu:.1f} % vs CDI"
     score += pts
     details_score.append(("Gain financier potentiel", pts, 2, detail))
 
     # 6. Coherence risque / situation (0-1)
     charge_familiale = nb_enfants > 0 or situation in ("marie", "pacse")
     if acceptation_risque == "eleve":
-        pts = 1; detail = "Forte tolerance au risque — compatible avec le saut freelance"
+        pts = 1; detail = "Forte tolérance au risque — compatible avec le saut freelance"
     elif acceptation_risque == "moyen" and not charge_familiale:
         pts = 1; detail = "Risque moyen, sans charge familiale lourde — acceptable"
     elif acceptation_risque == "moyen" and charge_familiale:
-        pts = 0; detail = "Risque moyen avec charge familiale — renforcer l'epargne avant"
+        pts = 0; detail = "Risque moyen avec charge familiale — renforcer l'épargne avant"
     else:  # faible
-        pts = 0; detail = "Faible tolerance au risque — portage salarial ou transition progressive conseillee"
+        pts = 0; detail = "Faible tolérance au risque — portage salarial ou transition progressive conseillée"
     score += pts
     details_score.append(("Profil risque / situation", pts, 1, detail))
 
@@ -11771,12 +12175,12 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
         verdict_court = "Envisageable"
         couleur = "++"
     elif score >= 4:
-        verdict = "A PREPARER — Des conditions cles ne sont pas reunies. Planifier sur 6-18 mois."
-        verdict_court = "Preparer le passage"
+        verdict = "A PRÉPARER — Des conditions clés ne sont pas réunies. Planifier sur 6-18 mois."
+        verdict_court = "Préparer le passage"
         couleur = "+"
     else:
-        verdict = "DECONSEILLE A CE STADE — Consolider d'abord experience, epargne et reseau"
-        verdict_court = "Trop tot"
+        verdict = "DÉCONSEILLÉ A CE STADE — Consolider d'abord expérience, épargne et réseau"
+        verdict_court = "Trop tôt"
         couleur = "---"
 
     # ── TJM cible recommande ──────────────────────────────────────────────────
@@ -11785,43 +12189,43 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
     # ── Mise en garde specifique situations a risque ─────────────────────────
     alertes = []
     if mois_buffer < 3:
-        alertes.append("Epargne critique : constituer au minimum 3 mois de charges avant de quitter le CDI.")
+        alertes.append("Épargne critique : constituer au minimum 3 mois de charges avant de quitter le CDI.")
     if not clients_potentiels and score >= 7:
-        alertes.append("Aucun prospect identifie : demarrer la prospection 3 a 6 mois avant la demission.")
+        alertes.append("Aucun prospect identifié : démarrer la prospection 3 à 6 mois avant la démission.")
     if anciennete_ans < 3:
-        alertes.append("Moins de 3 ans d'experience : risque de difficultes a justifier un TJM de marche.")
+        alertes.append("Moins de 3 ans d'expérience : risque de difficultés à justifier un TJM de marché.")
     if charge_familiale and mois_buffer < 6:
-        alertes.append("Charge familiale avec epargne < 6 mois : considerez le portage salarial comme etape intermediaire.")
+        alertes.append("Charge familiale avec épargne < 6 mois : considérez le portage salarial comme étape intermédiaire.")
     if ca_vise > act["seuil_ae"]:
-        alertes.append(f"CA vise ({ca_vise:,.0f} EUR) depasse le seuil AE ({act['seuil_ae']:,} EUR) : SASU ou EURL requis.")
+        alertes.append(f"CA visé ({ca_vise:,.0f} EUR) dépasse le seuil AE ({act['seuil_ae']:,} EUR) : SASU ou EURL requis.")
     if gain_pct_sasu < 0 and tjm_vise > 0:
-        alertes.append(f"Le TJM vise ({tjm_vise:.0f} EUR/j) ne permet pas d'egaliser le CDI. TJM minimum SASU : {tjm_min_sasu:,} EUR/j.")
+        alertes.append(f"Le TJM visé ({tjm_vise:.0f} EUR/j) ne permet pas d'égaliser le CDI. TJM minimum SASU : {tjm_min_sasu:,} EUR/j.")
 
     # ── Assemblage ─────────────────────────────────────────────────────────────
     lines = [
         "# Diagnostic Passage Freelance",
         "",
-        f"*Simulation indicative — Bareme {ANNEE_FISCALE}*",
+        f"*Simulation indicative — Barème {ANNEE_FISCALE}*",
         "",
-        "## Profil analyse",
+        "## Profil analysé",
         "",
         f"- Salaire CDI brut : {salaire_brut_cdi:,.0f} EUR/an — net en poche : {net_cdi:,} EUR/an ({net_cdi_mensuel:,} EUR/mois)",
         f"- Secteur : {sect['label']}",
-        f"- Experience : {anciennete_ans} an(s)",
-        f"- Epargne disponible : {epargne_disponible:,.0f} EUR ({mois_buffer:.1f} mois de charges)",
-        f"- Reseau / prospects : {'Oui' if clients_potentiels else 'Non'}",
+        f"- Expérience : {anciennete_ans} an(s)",
+        f"- Épargne disponible : {epargne_disponible:,.0f} EUR ({mois_buffer:.1f} mois de charges)",
+        f"- Réseau / prospects : {'Oui' if clients_potentiels else 'Non'}",
         f"- Situation familiale : {situation}, {nb_enfants} enfant(s)",
-        f"- Tolerance au risque : {acceptation_risque}",
-        f"- Regime fiscal vise : {type_activite}",
+        f"- Tolérance au risque : {acceptation_risque}",
+        f"- Régime fiscal visé : {type_activite}",
         "",
     ]
 
     lines += [
-        "## Score de maturite freelance",
+        "## Score de maturité freelance",
         "",
         f"**Score global : {score} / 12**",
         "",
-        "| Critere | Points | Max | Detail |",
+        "| Critère | Points | Max | Détail |",
         "|---------|--------|-----|--------|",
     ]
     for nom, pts, maxi, det in details_score:
@@ -11845,13 +12249,13 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
         lines.append("")
 
     lines += [
-        "## Projection financiere",
+        "## Projection financière",
         "",
-        f"*TJM analyse : {tjm_calcul:.0f} EUR/j HT — {jours} jours factures/an — CA : {ca_vise:,.0f} EUR*",
+        f"*TJM analysé : {tjm_calcul:.0f} EUR/j HT — {jours} jours facturés/an — CA : {ca_vise:,.0f} EUR*",
         "",
-        "| Scenario | Net annuel | vs CDI |",
+        "| Scénario | Net annuel | vs CDI |",
         "|----------|-----------|--------|",
-        f"| CDI actuel | {net_cdi:,} EUR | reference |",
+        f"| CDI actuel | {net_cdi:,} EUR | référence |",
     ]
     if ca_ae_ok:
         lines.append(f"| Auto-entrepreneur | {net_freelance_ae:,} EUR | {'+' if net_freelance_ae > net_cdi else ''}{net_freelance_ae - net_cdi:,} EUR |")
@@ -11865,9 +12269,9 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
         "",
         f"| Objectif | TJM | CA annuel ({jours} j) |",
         "|----------|-----|----------------------|",
-        f"| Egaliser le CDI net (SASU) | {tjm_min_sasu:,} EUR/j | {tjm_min_sasu * jours:,} EUR |",
-        f"| TJM recommande (+15% inter-contrats) | {tjm_cible_conservateur:,} EUR/j | {tjm_cible_conservateur * jours:,} EUR |",
-        f"| Median du secteur | {sect['tjm_median']:,} EUR/j | {sect['tjm_median'] * jours:,} EUR |",
+        f"| Égaliser le CDI net (SASU) | {tjm_min_sasu:,} EUR/j | {tjm_min_sasu * jours:,} EUR |",
+        f"| TJM recommandé (+15% inter-contrats) | {tjm_cible_conservateur:,} EUR/j | {tjm_cible_conservateur * jours:,} EUR |",
+        f"| Médian du secteur | {sect['tjm_median']:,} EUR/j | {sect['tjm_median'] * jours:,} EUR |",
         f"| Senior du secteur (>= 8 ans) | {sect['tjm_senior']:,} EUR/j | {sect['tjm_senior'] * jours:,} EUR |",
         "",
     ]
@@ -11875,31 +12279,31 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
     lines += [
         "## Analyse du secteur",
         "",
-        f"- Demande marche : {'*' * sect['demande']} ({sect['demande']}/5)",
+        f"- Demande marché : {'*' * sect['demande']} ({sect['demande']}/5)",
         f"- Risque metier : {sect['risque_metier']}",
         f"- Note : {sect['note']}",
         "",
     ]
 
     lines += [
-        "## Preparation recommandee avant le saut",
+        "## Préparation recommandée avant le saut",
         "",
-        "1. Epargne : constituer 6 a 12 mois de charges mensuelles avant de quitter le CDI",
-        "2. Reseau : identifier 2 a 3 clients potentiels ou une mission de demarrage",
-        "3. Statut : immatriculer SASU ou AE avant la demission (delai d'immatriculation : 1-5 jours)",
-        "4. Couverture : souscrire une RC Pro et mutuelle independant avant le depart",
-        "5. Transition : negocier une rupture conventionnelle pour conserver les droits au chomage (ARE)",
-        "   (ARE en independant : possible si CA < seuil ou en portage, a verifier Pole Emploi)",
-        "6. Expert-comptable : prevoir 1 500 a 2 500 EUR/an (SASU/EURL) ou 500 EUR (AE)",
+        "1. Épargne : constituer 6 à 12 mois de charges mensuelles avant de quitter le CDI",
+        "2. Réseau : identifier 2 à 3 clients potentiels ou une mission de démarrage",
+        "3. Statut : immatriculer SASU ou AE avant la démission (délai d'immatriculation : 1-5 jours)",
+        "4. Couverture : souscrire une RC Pro et mutuelle indépendant avant le départ",
+        "5. Transition : négocier une rupture conventionnelle pour conserver les droits au chômage (ARE)",
+        "   (ARE en indépendant : possible si CA < seuil ou en portage, à vérifier Pôle Emploi)",
+        "6. Expert-comptable : prévoir 1 500 à 2 500 EUR/an (SASU/EURL) ou 500 EUR (AE)",
         "",
         "## Alternatives au saut direct",
         "",
-        "- **Portage salarial** : tester sans creation de structure, conserver le chomage, charges ~8%",
-        "- **Cumuler CDI + activite annexe** : AE en micro pendant le CDI (accord employeur requis)",
-        "- **Negocier un temps partiel** : 4 jours/5 pour tester le marche en parallele",
+        "- **Portage salarial** : tester sans création de structure, conserver le chômage, charges ~8%",
+        "- **Cumuler CDI + activité annexe** : AE en micro pendant le CDI (accord employeur requis)",
+        "- **Négocier un temps partiel** : 4 jours/5 pour tester le marché en parallèle",
         "",
         "---",
-        f"*Simulation basee sur les taux {ANNEE_FISCALE}. Consultez un expert-comptable avant toute decision.*",
+        f"*Simulation basée sur les taux {ANNEE_FISCALE}. Consultez un expert-comptable avant toute décision.*",
     ]
     return "\n".join(lines)
 
