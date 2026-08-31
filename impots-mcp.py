@@ -4,8 +4,17 @@ MCP Impôts Français - Expert en optimisation fiscale pour particuliers et prof
 Spécialiste de l'impôt sur le revenu, IS, IFI, PER, cryptomonnaies,
 épargne salariale, transmission d'entreprise et SCI.
 
-Version : 2.9.0
+Version : 3.0.0
 Données : Barème IR 2026 +0,9% (revenus 2025, LFI n°2026-103 du 19/02/2026),
+          Prélèvements sociaux sur le capital 18,6% et PFU 31,4% (LFSS 2026),
+          taux maintenu à 17,2% sur les revenus fonciers, les plus-values
+          immobilières, l'assurance-vie et l'épargne logement,
+          CDHR (imposition minimale de 20% des hauts revenus, art. 224 CGI),
+          Facturation électronique obligatoire au 01/09/2026,
+          Prélèvement à la source : grille des taux par défaut au 01/05/2026
+          (métropole et DOM), nouveau taux personnalisé au 01/09/2026,
+          Suspension de la réforme des retraites 2023 (01/09/2026 au 01/01/2028),
+          ARE après rupture conventionnelle réduite au 01/09/2026,
           IFI 2026, PER 2026, IS 2026, Calendrier 2026 (dates officielles),
           Livret A/LDDS 1,7% / LEP 2,5% (depuis 01/08/2026),
           PASS 2026 48 060€, SMIC 2026 12,31€/h (depuis 01/06/2026),
@@ -16,10 +25,10 @@ Données : Barème IR 2026 +0,9% (revenus 2025, LFI n°2026-103 du 19/02/2026),
           Barème kilométrique (inchangé depuis 2023, majoration 20% électrique),
           Plafonds LEP 2026, cotisations Cipav 23,2%,
           CEHR, Droits de donation/succession, SCPI, Crypto 2086,
-          Retraite (réforme 2023), Fiscalité agricole, Outre-mer DOM-TOM
+          Fiscalité agricole, Outre-mer DOM-TOM
 """
 
-__version__ = "2.9.0"
+__version__ = "3.0.0"
 
 import json
 import sys
@@ -93,6 +102,53 @@ SEUIL_MICRO_SERVICES = 83_600
 SEUIL_TVA_FRANCHISE_VENTE = 85_000
 SEUIL_TVA_FRANCHISE_SERVICES = 37_500
 
+# ─── Prélèvements sociaux sur les revenus du capital ─────────────────────────
+# LFSS 2026 (loi n° 2025-1403 du 30/12/2025) : CSG portée de 9,2% à 10,6%.
+# Le taux global passe donc de 17,2% à 18,6%, sauf pour les revenus
+# limitativement énumérés à l'art. L. 136-8, IV du code de la sécurité sociale
+# qui restent à 17,2% : revenus fonciers, plus-values immobilières des
+# particuliers, produits d'assurance-vie et de capitalisation, épargne
+# logement (PEL, CEL) et PEP.
+# Entrée en vigueur : revenus du patrimoine perçus dès 2025 (art. L. 136-6,
+# donc plus-values mobilières, BIC non professionnels, LMNP) et produits de
+# placement versés à compter du 01/01/2026 (art. L. 136-7 : dividendes,
+# intérêts, PEA, épargne salariale, PER).
+CSG_CAPITAL = 0.106
+CSG_CAPITAL_TAUX_MAINTENU = 0.092
+CRDS = 0.005
+PRELEVEMENT_SOLIDARITE = 0.075
+CSG_DEDUCTIBLE = 0.068          # fraction déductible si option pour le barème (art. 154 quinquies II CGI)
+
+PS_CAPITAL = 0.186              # dividendes, intérêts, PV mobilières, crypto, PEA, épargne salariale, PER, LMNP
+PS_IMMOBILIER = 0.172           # revenus fonciers et plus-values immobilières des particuliers
+PS_ASSURANCE_VIE = 0.172        # contrats d'assurance-vie et de capitalisation
+PS_EPARGNE_LOGEMENT = 0.172     # PEL, CEL, PEP
+PS_PENSION = 0.091              # pensions et rentes viagères à titre gratuit (CSG 8,3 + CRDS 0,5 + Casa 0,3)
+DATE_HAUSSE_CSG_CAPITAL = "01/01/2026"
+
+PFU_IR = 0.128                  # prélèvement forfaitaire unique, part impôt sur le revenu
+PFU_CAPITAL = PFU_IR + PS_CAPITAL          # 31,4%
+PFU_ASSURANCE_VIE = PFU_IR + PS_ASSURANCE_VIE   # 30,0% avant 8 ans
+PFU_AV_TAUX_REDUIT = 0.075      # assurance-vie après 8 ans, dans la limite de 150 000€ de versements
+PFU_AV_REDUIT_TOTAL = PFU_AV_TAUX_REDUIT + PS_ASSURANCE_VIE  # 24,7%
+IR_PV_IMMOBILIERE = 0.19
+BSPCE_IR_MAJORE = 0.30          # cession de titres BSPCE avant 3 ans d'ancienneté dans la société
+
+# ─── CDHR — Contribution différentielle sur les hauts revenus ────────────────
+# Art. 224 CGI, créé par la LF 2025 (art. 10) et pérennisé par la LF 2026
+# jusqu'au retour du déficit public sous 3% du PIB. Imposition minimale de 20%
+# du revenu fiscal de référence retraité.
+CDHR_TAUX = 0.20
+CDHR_SEUIL_SEUL = 250_000
+CDHR_SEUIL_COUPLE = 500_000
+CDHR_PLAFOND_DECOTE_SEUL = 330_000
+CDHR_PLAFOND_DECOTE_COUPLE = 660_000
+CDHR_COEF_DECOTE = 0.825
+CDHR_MAJORATION_COUPLE = 12_500
+CDHR_MAJORATION_PERSONNE_CHARGE = 1_500
+CDHR_ACOMPTE_TAUX = 0.95
+CDHR_ACOMPTE_PERIODE = "1er au 15 décembre"
+
 
 def pct_fr(taux: float, decimales: int = 1) -> str:
     """Formate un taux décimal en pourcentage à la française (virgule décimale)."""
@@ -154,6 +210,23 @@ ABATTEMENT_FRAIS_PRO_TAUX = 0.10
 ABATTEMENT_FRAIS_PRO_MAX = 14_555
 ABATTEMENT_FRAIS_PRO_MIN = 509
 
+# Abattement de 10% sur les pensions et retraites (art. 158-5 a CGI), revenus 2025
+ABATTEMENT_PENSION_TAUX = 0.10
+ABATTEMENT_PENSION_MIN = 454      # par pensionné
+ABATTEMENT_PENSION_MAX = 4_439    # par foyer fiscal
+
+# Pension alimentaire versée à un enfant majeur (art. 156 II-2° CGI), revenus 2025
+PLAFOND_PENSION_ENFANT_MAJEUR = 6_855
+PLAFOND_PENSION_ENFANT_MARIE = 13_710
+FORFAIT_ENFANT_MAJEUR_HEBERGE = 4_075
+
+# Abattement spécial personnes âgées de plus de 65 ans ou invalides (art. 157 bis CGI)
+# Revenus 2025 : 2 822€ si le revenu net global n'excède pas 17 677€, 1 411€ jusqu'à 28 430€.
+ABATT_PERSONNES_AGEES_PLEIN = 2_822
+ABATT_PERSONNES_AGEES_REDUIT = 1_411
+SEUIL_ABATT_PERSONNES_AGEES_1 = 17_677
+SEUIL_ABATT_PERSONNES_AGEES_2 = 28_430
+
 SMIC_BRUT_ANNUEL = 22_404
 
 BAREME_KM_AUTO = {
@@ -182,9 +255,18 @@ DEFICIT_FONCIER_PLAFOND = 10_700
 DEFICIT_FONCIER_PLAFOND_ENERGETIQUE = 21_400
 DEFICIT_FONCIER_ENERGETIQUE_FIN = "31/12/2025"
 
+# Plafond d'épargne retraite : 10% des revenus professionnels, dans la limite de
+# 8 PASS de l'année N-1, avec un plancher de 10% d'un PASS N-1 (art. 163 quatervicies CGI).
 PLAFOND_PER_POURCENTAGE = 0.10
-PLAFOND_PER_MAX_2025 = round(8 * PASS_2024 * PLAFOND_PER_POURCENTAGE)
-PLAFOND_PER_MIN_2025 = round(PASS_2024 * PLAFOND_PER_POURCENTAGE)
+# Versements 2025, déductibles des revenus 2025 déclarés en 2026 (PASS 2024)
+PLAFOND_PER_MAX_VERSEMENTS_2025 = round(8 * PASS_2024 * PLAFOND_PER_POURCENTAGE)
+PLAFOND_PER_MIN_VERSEMENTS_2025 = round(PASS_2024 * PLAFOND_PER_POURCENTAGE)
+# Versements 2026, déductibles des revenus 2026 déclarés en 2027 (PASS 2025)
+PLAFOND_PER_MAX_VERSEMENTS_2026 = round(8 * PASS_2025 * PLAFOND_PER_POURCENTAGE)
+PLAFOND_PER_MIN_VERSEMENTS_2026 = round(PASS_2025 * PLAFOND_PER_POURCENTAGE)
+# Plafond applicable à un versement effectué aujourd'hui
+PLAFOND_PER_MAX = PLAFOND_PER_MAX_VERSEMENTS_2026
+PLAFOND_PER_MIN = PLAFOND_PER_MIN_VERSEMENTS_2026
 
 # Crédits d'impôt principaux 2025
 CREDITS_IMPOT = {
@@ -283,7 +365,7 @@ EPARGNE_FISCALE = {
     "PER": {
         "nom": "Plan d'Épargne Retraite (PER individuel)",
         "avantage": "Versements déductibles du revenu imposable",
-        "plafond": f"10% des revenus professionnels nets (max {PLAFOND_PER_MAX_2025:,}€) ou 10% du PASS ({PLAFOND_PER_MIN_2025:,}€)",
+        "plafond": f"10% des revenus professionnels nets (max {PLAFOND_PER_MAX:,}€) ou 10% du PASS ({PLAFOND_PER_MIN:,}€)",
         "sortie": "Capital ou rente à la retraite (fiscalisé). Sortie en capital possible (cas exceptionnels).",
         "remarque": "Économie d'impôt = versement × taux marginal d'imposition",
         "article": "Art. L224-1 Code monétaire",
@@ -292,7 +374,7 @@ EPARGNE_FISCALE = {
         "nom": "Plan d'Épargne en Actions (PEA)",
         "avantage": "Exonération d'IR sur les plus-values et dividendes après 5 ans",
         "plafond": "150 000€ (PEA classique) + 75 000€ (PEA-PME)",
-        "sortie": "Prélèvements sociaux 17,2% uniquement après 5 ans",
+        "sortie": f"Prélèvements sociaux {pct_fr(PS_CAPITAL)} uniquement après 5 ans",
         "article": "Art. 163 quinquies D CGI",
     },
     "assurance_vie": {
@@ -345,7 +427,8 @@ DEDUCTIONS_REVENU = {
     "pension_alimentaire": {
         "nom": "Pensions alimentaires versées",
         "description": "Déductibles si versées à ascendants/descendants dans le besoin ou ex-conjoint (fixée par jugement).",
-        "plafond_enfant_majeur": 6_368,  # par enfant en 2024
+        "plafond_enfant_majeur": PLAFOND_PENSION_ENFANT_MAJEUR,
+        "forfait_heberge": FORFAIT_ENFANT_MAJEUR_HEBERGE,
         "article": "Art. 156 II CGI",
     },
     "per_versements": {
@@ -373,10 +456,10 @@ DEDUCTIONS_REVENU = {
 # Données MaPrimeRénov' 2025
 MAPRIMERENOV = {
     "categories": {
-        "bleu":   {"label": "MaPrimeRénov' Bleu (très modestes)",     "rang": 0, "couleur": "Bleu"},
-        "jaune":  {"label": "MaPrimeRénov' Jaune (modestes)",         "rang": 1, "couleur": "Jaune"},
+        "bleu": {"label": "MaPrimeRénov' Bleu (très modestes)",     "rang": 0, "couleur": "Bleu"},
+        "jaune": {"label": "MaPrimeRénov' Jaune (modestes)",         "rang": 1, "couleur": "Jaune"},
         "violet": {"label": "MaPrimeRénov' Violet (intermédiaires)",  "rang": 2, "couleur": "Violet"},
-        "rose":   {"label": "MaPrimeRénov' Rose (supérieurs)",        "rang": None, "couleur": "Rose"},
+        "rose": {"label": "MaPrimeRénov' Rose (supérieurs)",        "rang": None, "couleur": "Rose"},
     },
     "travaux": {
         "raccordement_reseau_chaleur": {
@@ -517,8 +600,28 @@ CALENDRIER_FISCAL_2026 = [
         "important": False,
     },
     {
+        "date": "1er septembre 2026",
+        "evenement": "Entrée en vigueur du nouveau taux de prélèvement à la source, issu de la déclaration des revenus 2025",
+        "important": True,
+    },
+    {
+        "date": "1er septembre 2026",
+        "evenement": "Facturation électronique : réception obligatoire pour toutes les entreprises, émission obligatoire pour les grandes entreprises et les ETI",
+        "important": True,
+    },
+    {
+        "date": "1er septembre 2026",
+        "evenement": "Suspension de la réforme des retraites 2023 jusqu'au 1er janvier 2028 (générations 1964 à 1968)",
+        "important": False,
+    },
+    {
         "date": "15 septembre 2026",
-        "evenement": "Date limite paiement solde IR si avis > 300€ (non-mensuel)",
+        "evenement": "Date limite de paiement du solde d'IR par moyen non dématérialisé (20 septembre pour un paiement en ligne)",
+        "important": True,
+    },
+    {
+        "date": "25 septembre 2026",
+        "evenement": "Prélèvement automatique du solde d'IR. Au-delà de 300€, étalement en quatre échéances du 25 septembre au 28 décembre 2026",
         "important": True,
     },
     {
@@ -527,8 +630,13 @@ CALENDRIER_FISCAL_2026 = [
         "important": False,
     },
     {
+        "date": "1er au 15 décembre 2026",
+        "evenement": "Acompte de 95% de la CDHR pour les foyers dont le RFR dépasse 250 000€ (500 000€ en couple)",
+        "important": True,
+    },
+    {
         "date": "31 décembre 2026",
-        "evenement": "⚡ DEADLINE : versements PER, dons, souscriptions PME — économies d'impôt 2026",
+        "evenement": "DEADLINE : versements PER, dons, souscriptions PME. Dernier jour pour agir sur l'impôt 2027",
         "important": True,
     },
     {
@@ -536,10 +644,165 @@ CALENDRIER_FISCAL_2026 = [
         "evenement": "Vérifier éligibilité LEP, nouveaux plafonds Livret A / LDDS",
         "important": False,
     },
+    {
+        "date": "1er septembre 2027",
+        "evenement": "Facturation électronique : émission obligatoire et e-reporting pour les PME, TPE et micro-entreprises",
+        "important": False,
+    },
 ]
-# Alias pour compatibilité
-CALENDRIER_FISCAL_2025 = CALENDRIER_FISCAL_2026
 
+# ─── Grille des taux par défaut du prélèvement à la source ───────────────────
+# Source : BOI-BAREME-000037 du 07/04/2026, en vigueur au 1er mai 2026.
+# Chaque entrée est (borne haute exclue de la base mensuelle, taux en %).
+TAUX_NEUTRES_PAS = {
+    "metropole": [
+        (1_635, 0.0),
+        (1_698, 0.5),
+        (1_807, 1.3),
+        (1_928, 2.1),
+        (2_060, 2.9),
+        (2_170, 3.5),
+        (2_315, 4.1),
+        (2_738, 5.3),
+        (3_135, 7.5),
+        (3_571, 9.9),
+        (4_019, 11.9),
+        (4_690, 13.8),
+        (5_624, 15.8),
+        (7_037, 17.9),
+        (8_789, 20.0),
+        (12_200, 24.0),
+        (16_523, 28.0),
+        (25_937, 33.0),
+        (55_558, 38.0),
+        (None, 43.0),
+    ],
+    "guadeloupe_martinique_reunion": [
+        (1_875, 0.0),
+        (1_989, 0.5),
+        (2_191, 1.3),
+        (2_392, 2.1),
+        (2_642, 2.9),
+        (2_786, 3.5),
+        (2_881, 4.1),
+        (3_170, 5.3),
+        (3_920, 7.5),
+        (5_016, 9.9),
+        (5_697, 11.9),
+        (6_599, 13.8),
+        (7_907, 15.8),
+        (8_789, 17.9),
+        (9_989, 20.0),
+        (13_738, 24.0),
+        (18_253, 28.0),
+        (27_858, 33.0),
+        (60_893, 38.0),
+        (None, 43.0),
+    ],
+    "guyane_mayotte": [
+        (2_008, 0.0),
+        (2_170, 0.5),
+        (2_420, 1.3),
+        (2_728, 2.1),
+        (2_833, 2.9),
+        (2_930, 3.5),
+        (3_026, 4.1),
+        (3_362, 5.3),
+        (4_639, 7.5),
+        (6_005, 9.9),
+        (6_772, 11.9),
+        (7_858, 13.8),
+        (8_644, 15.8),
+        (9_577, 17.9),
+        (11_115, 20.0),
+        (14_953, 24.0),
+        (19_020, 28.0),
+        (30_482, 33.0),
+        (64_341, 38.0),
+        (None, 43.0),
+    ],
+}
+# Abattement applicable aux contrats courts (50% du SMIC net imposable mensuel)
+PAS_ABATTEMENT_CONTRAT_COURT = 748
+PAS_DATE_GRILLE = "1er mai 2026"
+PAS_DATE_NOUVEAU_TAUX = "1er septembre 2026"
+PAS_TAUX_INDIVIDUALISE_DEFAUT_DEPUIS = "1er septembre 2025"
+
+# ─── Facturation électronique (art. 289 bis CGI) ─────────────────────────────
+# Calendrier fixé par la LF 2024 (art. 91) puis aménagé par la LF 2026.
+FACTURATION_ELECTRONIQUE = {
+    "date_reception": "1er septembre 2026",
+    "date_emission_ge_eti": "1er septembre 2026",
+    "date_emission_pme_tpe": "1er septembre 2027",
+    "tailles": {
+        "grande_entreprise": {
+            "label": "Grande entreprise",
+            "seuils": "au moins 5 000 salariés, ou CA > 1 500 M€ et bilan > 2 000 M€",
+            "emission": "1er septembre 2026",
+        },
+        "eti": {
+            "label": "Entreprise de taille intermédiaire (ETI)",
+            "seuils": "moins de 5 000 salariés et CA ≤ 1 500 M€ ou bilan ≤ 2 000 M€",
+            "emission": "1er septembre 2026",
+        },
+        "pme": {
+            "label": "PME",
+            "seuils": "moins de 250 salariés et CA ≤ 50 M€ ou bilan ≤ 43 M€",
+            "emission": "1er septembre 2027",
+        },
+        "tpe": {
+            "label": "TPE",
+            "seuils": "moins de 10 salariés et CA ≤ 2 M€",
+            "emission": "1er septembre 2027",
+        },
+        "micro_entreprise": {
+            "label": "Micro-entreprise / auto-entrepreneur",
+            "seuils": "régime micro-fiscal, y compris en franchise en base de TVA",
+            "emission": "1er septembre 2027",
+        },
+    },
+    "formats": ["Factur-X (PDF/A-3 + XML)", "UBL", "CII"],
+    "mentions_nouvelles": [
+        "numéro SIREN du client assujetti",
+        "adresse de livraison des biens si elle diffère de l'adresse de facturation",
+        "nature de l'opération (livraison de biens, prestation de services ou opération mixte)",
+        "mention de l'option pour le paiement de la TVA sur les débits, le cas échéant",
+    ],
+    "sanctions": {
+        "facture_non_electronique": 50,
+        "facture_plafond_annuel": 15_000,
+        "ereporting_transmission": 500,
+        "ereporting_plafond_annuel": 15_000,
+        "absence_plateforme": 500,
+        "absence_plateforme_persistance": 1_000,
+    },
+}
+
+# ─── Suspension de la réforme des retraites (LFSS 2026) ──────────────────────
+# Pensions prenant effet à compter du 1er septembre 2026 et jusqu'au 01/01/2028.
+RETRAITE_SUSPENSION = {
+    "date_debut": "1er septembre 2026",
+    "date_fin": "1er janvier 2028",
+    "generations": {
+        1964: {"age": "62 ans et 9 mois", "trimestres": 170, "avant": "63 ans / 171 trimestres"},
+        1965: {"age": "62 ans et 9 mois (1er trimestre) ou 63 ans", "trimestres": 170,
+               "avant": "63 ans et 3 mois / 172 trimestres"},
+        1966: {"age": "63 ans et 3 mois", "trimestres": 172, "avant": "63 ans et 6 mois / 172 trimestres"},
+        1967: {"age": "63 ans et 6 mois", "trimestres": 172, "avant": "63 ans et 9 mois / 172 trimestres"},
+        1968: {"age": "63 ans et 9 mois", "trimestres": 172, "avant": "64 ans / 172 trimestres"},
+    },
+}
+
+# ─── Assurance chômage après rupture conventionnelle ─────────────────────────
+# Avenant n°2 à la convention du 15/11/2024, agréé le 19/06/2026 : s'applique
+# aux fins de contrat intervenant à compter du 1er septembre 2026.
+ARE_RUPTURE_CONVENTIONNELLE = {
+    "date_effet": "1er septembre 2026",
+    "duree_moins_55_mois": 15.0,
+    "duree_55_et_plus_mois": 20.5,
+    "duree_anterieure_moins_55_mois": 18.0,
+    "duree_anterieure_55_et_plus_mois": 22.5,
+}
 # ─── Barème IFI 2026 ─────────────────────────────────────────────────────────
 
 BAREME_IFI = [
@@ -590,18 +853,18 @@ BAREME_DROITS = {
         {"min": 0,      "max": 24_430, "taux": 0.35},
         {"min": 24_430, "max": None,   "taux": 0.45},
     ],
-    "neveu_niece":  [{"min": 0, "max": None, "taux": 0.55}],
-    "autre":        [{"min": 0, "max": None, "taux": 0.60}],
+    "neveu_niece": [{"min": 0, "max": None, "taux": 0.55}],
+    "autre": [{"min": 0, "max": None, "taux": 0.60}],
 }
 
 ABATTEMENTS_DONATIONS = {
-    "enfant_parent":  {"label": "Enfant ↔ Parent",         "montant": 100_000, "bareme": "ligne_directe",    "periodicite": 15},
-    "petit_enfant":   {"label": "Petit-enfant",             "montant": 31_865,  "bareme": "ligne_directe",    "periodicite": 15},
+    "enfant_parent": {"label": "Enfant ↔ Parent",         "montant": 100_000, "bareme": "ligne_directe",    "periodicite": 15},
+    "petit_enfant": {"label": "Petit-enfant",             "montant": 31_865,  "bareme": "ligne_directe",    "periodicite": 15},
     "arriere_petit_enfant": {"label": "Arrière-petit-enfant", "montant": 5_310, "bareme": "ligne_directe",    "periodicite": 15},
-    "conjoint_pacs":  {"label": "Conjoint / PACS",          "montant": 80_724,  "bareme": "conjoint_donation","periodicite": 15},
-    "frere_soeur":    {"label": "Frère / Sœur",             "montant": 15_932,  "bareme": "frere_soeur",      "periodicite": 15},
-    "neveu_niece":    {"label": "Neveu / Nièce",            "montant": 7_967,   "bareme": "neveu_niece",      "periodicite": 15},
-    "autre":          {"label": "Autre (non-parent)",        "montant": 1_594,   "bareme": "autre",            "periodicite": 15},
+    "conjoint_pacs": {"label": "Conjoint / PACS",          "montant": 80_724,  "bareme": "conjoint_donation","periodicite": 15},
+    "frere_soeur": {"label": "Frère / Sœur",             "montant": 15_932,  "bareme": "frere_soeur",      "periodicite": 15},
+    "neveu_niece": {"label": "Neveu / Nièce",            "montant": 7_967,   "bareme": "neveu_niece",      "periodicite": 15},
+    "autre": {"label": "Autre (non-parent)",        "montant": 1_594,   "bareme": "autre",            "periodicite": 15},
 }
 
 # Don exceptionnel de somme d'argent (Pacte Dutreil simplifié)
@@ -611,22 +874,22 @@ DON_ARGENT_EXONERE = {
 }
 
 ABATTEMENTS_SUCCESSION = {
-    "conjoint_pacs":  {"label": "Conjoint / PACS (survivant)", "montant": None,    "bareme": None,          "note": "EXONÉRÉ totalement"},
-    "enfant":         {"label": "Enfant",                      "montant": 100_000, "bareme": "ligne_directe","periodicite": None},
-    "petit_enfant":   {"label": "Petit-enfant (par représentation)", "montant": 1_594, "bareme": "ligne_directe", "periodicite": None},
-    "frere_soeur":    {"label": "Frère / Sœur",                "montant": 15_932,  "bareme": "frere_soeur",  "periodicite": None, "exo_conditions": "Exonéré si célibataire/veuf/divorcé, vivant avec le défunt depuis 5 ans"},
-    "neveu_niece":    {"label": "Neveu / Nièce",               "montant": 7_967,   "bareme": "neveu_niece",  "periodicite": None},
-    "autre":          {"label": "Autre",                       "montant": 1_594,   "bareme": "autre",        "periodicite": None},
-    "handicape":      {"label": "Personne handicapée (supplément)", "montant": 159_325, "bareme": None,      "periodicite": None, "note": "Abattement supplémentaire cumulable"},
+    "conjoint_pacs": {"label": "Conjoint / PACS (survivant)", "montant": None,    "bareme": None,          "note": "EXONÉRÉ totalement"},
+    "enfant": {"label": "Enfant",                      "montant": 100_000, "bareme": "ligne_directe","periodicite": None},
+    "petit_enfant": {"label": "Petit-enfant (par représentation)", "montant": 1_594, "bareme": "ligne_directe", "periodicite": None},
+    "frere_soeur": {"label": "Frère / Sœur",                "montant": 15_932,  "bareme": "frere_soeur",  "periodicite": None, "exo_conditions": "Exonéré si célibataire/veuf/divorcé, vivant avec le défunt depuis 5 ans"},
+    "neveu_niece": {"label": "Neveu / Nièce",               "montant": 7_967,   "bareme": "neveu_niece",  "periodicite": None},
+    "autre": {"label": "Autre",                       "montant": 1_594,   "bareme": "autre",        "periodicite": None},
+    "handicape": {"label": "Personne handicapée (supplément)", "montant": 159_325, "bareme": None,      "periodicite": None, "note": "Abattement supplémentaire cumulable"},
 }
 
 # ─── SCPI ─────────────────────────────────────────────────────────────────────
 SCPI_INFO = {
     "regime_revenus": "Revenus fonciers (location nue) — ajoutés au revenu imposable",
-    "ps_taux": 0.172,
+    "ps_taux": PS_IMMOBILIER,
     "abattement_micro_foncier": 0.30,
     "seuil_micro_foncier": 15_000,
-    "plus_value": "Régime immobilier : 19% IR + 17,2% PS avec abattements durée détention",
+    "plus_value": f"Régime immobilier : {pct_fr(IR_PV_IMMOBILIERE, 0)} IR + {pct_fr(PS_IMMOBILIER)} PS avec abattements durée détention",
     "note_demembrement": "SCPI en nue-propriété : aucun revenu taxable, récupération pleine propriété à terme",
 }
 
@@ -666,7 +929,7 @@ TNS_COTISATIONS = {
 
 PLAFOND_MADELIN_2025 = {
     "prevoyance": {"taux": 0.07, "max_pass": 3.75, "description": "Prévoyance (maladie, invalidité, décès)"},
-    "retraite":   {"taux": 0.10, "max_pass": 8.0,  "description": "Retraite complémentaire (art. 154 bis)"},
+    "retraite": {"taux": 0.10, "max_pass": 8.0,  "description": "Retraite complémentaire (art. 154 bis)"},
     "perte_emploi": {"taux": 0.01875, "max_pass": 8.0, "description": "Perte d'emploi involontaire"},
 }
 
@@ -1164,6 +1427,45 @@ def calculer_cehr(revenu_net_global: float, situation_famille: str) -> float:
     return round(cehr, 2)
 
 
+def calculer_cdhr(rfr: float, situation_famille: str, impots_acquittes: float,
+                  nb_personnes_charge: int = 0) -> Dict:
+    """Calcule la contribution différentielle sur les hauts revenus (art. 224 CGI).
+
+    Assure une imposition minimale de 20% du revenu fiscal de référence retraité.
+    Une décote lisse l'entrée dans le dispositif entre le seuil d'assujettissement
+    et 330 000€ (personne seule) ou 660 000€ (imposition commune).
+    """
+    couple = situation_famille in ("marie", "pacse")
+    seuil = CDHR_SEUIL_COUPLE if couple else CDHR_SEUIL_SEUL
+    plafond_decote = CDHR_PLAFOND_DECOTE_COUPLE if couple else CDHR_PLAFOND_DECOTE_SEUL
+
+    if rfr <= seuil:
+        return {
+            "assujetti": False, "seuil": seuil, "impot_cible": 0.0, "decote_appliquee": False,
+            "majorations": 0.0, "impots_acquittes": round(impots_acquittes, 2), "montant": 0.0,
+            "acompte": 0.0, "taux_effectif_min": CDHR_TAUX,
+        }
+
+    cible_pleine = rfr * CDHR_TAUX
+    cible_decote = CDHR_COEF_DECOTE * (rfr - seuil)
+    impot_cible = min(cible_pleine, cible_decote)
+    decote = rfr < plafond_decote
+
+    majorations = 0.0
+    if couple:
+        majorations += CDHR_MAJORATION_COUPLE
+    majorations += nb_personnes_charge * CDHR_MAJORATION_PERSONNE_CHARGE
+
+    montant = max(0.0, impot_cible - impots_acquittes - majorations)
+    return {
+        "assujetti": True, "seuil": seuil, "impot_cible": round(impot_cible, 2),
+        "decote_appliquee": decote, "majorations": round(majorations, 2),
+        "impots_acquittes": round(impots_acquittes, 2), "montant": round(montant, 2),
+        "acompte": round(montant * CDHR_ACOMPTE_TAUX, 2),
+        "taux_effectif_min": impot_cible / rfr if rfr else 0.0,
+    }
+
+
 # ─── Serveur MCP ─────────────────────────────────────────────────────────────
 
 server = Server("impots-mcp")
@@ -1229,7 +1531,7 @@ TOOLS = [
     Tool(
         name="simuler_tranches_imposition",
         description=(
-            "Affiche le détail des tranches d'imposition 2025 et montre "
+            f"Affiche le détail des tranches d'imposition {ANNEE_DECLARATION} et montre "
             "dans quelle tranche se situe un revenu donné."
         ),
         inputSchema={
@@ -1484,7 +1786,7 @@ TOOLS = [
     Tool(
         name="calendrier_fiscal",
         description=(
-            "Affiche le calendrier fiscal 2025 avec toutes les dates importantes : "
+            f"Affiche le calendrier fiscal {ANNEE_DECLARATION} avec toutes les dates importantes : "
             "déclaration de revenus, paiements, versements PER, etc."
         ),
         inputSchema={
@@ -1673,7 +1975,7 @@ TOOLS = [
     Tool(
         name="guide_maprimerenov",
         description=(
-            "Guide complet MaPrimeRénov' 2025 : catégories de revenus, travaux éligibles, "
+            f"Guide complet MaPrimeRénov' {ANNEE_DECLARATION} : catégories de revenus, travaux éligibles, "
             "montants des aides, conditions, démarches. "
             "Calcule l'aide estimée selon les revenus et les travaux envisagés."
         ),
@@ -1920,8 +2222,9 @@ TOOLS = [
         name="calculer_prelevement_source",
         description=(
             "Calcule et explique le taux de prélèvement à la source (PAS). "
-            "Indique le taux personnalisé estimé, le taux neutre, les mensualités prélevées, "
-            "et comment moduler (à la hausse ou à la baisse) via impots.gouv.fr."
+            "Indique le taux personnalisé estimé, le taux par défaut issu de la grille officielle "
+            "(métropole ou DOM), les mensualités prélevées, le calendrier du taux applicable au "
+            "1er septembre et comment moduler via impots.gouv.fr."
         ),
         inputSchema={
             "type": "object",
@@ -1943,6 +2246,12 @@ TOOLS = [
                     "type": "number",
                     "description": "Autres revenus annuels (fonciers, BIC, BNC...) soumis à acompte",
                     "default": 0,
+                },
+                "zone": {
+                    "type": "string",
+                    "enum": ["metropole", "guadeloupe_martinique_reunion", "guyane_mayotte"],
+                    "description": "Zone géographique : la grille des taux par défaut diffère outre-mer",
+                    "default": "metropole",
                 },
             },
             "required": ["revenu_net_imposable", "situation_famille"],
@@ -2212,7 +2521,7 @@ TOOLS = [
         name="calculer_fiscalite_crypto",
         description=(
             "Calcule la fiscalité des cryptomonnaies selon la méthode officielle 2086 (FIFO/PAMC). "
-            "Gère PFU 30%, option barème IR, moins-values reportables sur 10 ans, "
+            f"Gère PFU {pct_fr(PFU_CAPITAL)}, option barème IR, moins-values reportables sur 10 ans, "
             "revenus staking/mining/DeFi/NFT/airdrops. Remplace le calcul simplifié."
         ),
         inputSchema={
@@ -2385,7 +2694,7 @@ TOOLS = [
                 "moins_3ans_societe": {
                     "type": "boolean",
                     "default": False,
-                    "description": "Présent dans la société depuis moins de 3 ans (BSPCE : taux majoré à 47.2%)",
+                    "description": f"Présent dans la société depuis moins de 3 ans (BSPCE : taux majoré à {pct_fr(BSPCE_IR_MAJORE + PS_CAPITAL)})",
                 },
             },
             "required": ["type_dispositif"],
@@ -2788,7 +3097,7 @@ TOOLS = [
     Tool(
         name="simuler_cession_entreprise",
         description=(
-            "Simule la fiscalité de cession d'entreprise : PFU 30%, abattement renforcé PME (50%/65%/85%), "
+            f"Simule la fiscalité de cession d'entreprise : PFU {pct_fr(PFU_CAPITAL)}, abattement renforcé PME (50%/65%/85%), "
             "abattement départ retraite dirigeant (500 000€), apport-cession avec report d'imposition "
             "(art. 150-0 B ter). Compare tous les régimes."
         ),
@@ -2830,7 +3139,8 @@ TOOLS = [
     Tool(
         name="calculer_tva",
         description=(
-            "Guide TVA complet : seuils de franchise en base 2025 (37 500€ services / 85 000€ marchandises), "
+            f"Guide TVA complet : seuils de franchise en base ({SEUIL_TVA_FRANCHISE_SERVICES:,}€ services / "
+            f"{SEUIL_TVA_FRANCHISE_VENTE:,}€ marchandises), "
             "régime réel simplifié vs normal, taux 20%/10%/5.5%/2.1%, calcul TVA nette, "
             "TVA intracommunautaire (OSS, autoliquidation)."
         ),
@@ -2851,7 +3161,7 @@ TOOLS = [
     Tool(
         name="guide_auto_entrepreneur",
         description=(
-            "Guide complet auto-entrepreneur / micro-entrepreneur : seuils CA 2025, taux de cotisations, "
+            f"Guide complet auto-entrepreneur / micro-entrepreneur : seuils de CA {ANNEE_DECLARATION}, taux de cotisations, "
             "versement libératoire forfaitaire (VFL), ACRE, abattements IR, TVA franchise, "
             "CFE, obligations déclaratives, radiation."
         ),
@@ -2893,7 +3203,7 @@ TOOLS = [
         name="simuler_investissement_pea",
         description=(
             "Simule la fiscalité du PEA (Plan Épargne en Actions) : exonération IR après 5 ans, "
-            "PS 17.2% sur les gains, plafond 150 000€ (PEA) + 75 000€ (PEA-PME), "
+            f"PS {pct_fr(PS_CAPITAL)} sur les gains, plafond 150 000€ (PEA) + 75 000€ (PEA-PME), "
             "rente viagère exonérée, comparatif PEA vs CTO."
         ),
         inputSchema={
@@ -2935,7 +3245,7 @@ TOOLS = [
         description=(
             "Calcule la plus-value immobilière avec tous les mécanismes officiels : "
             "frais d'acquisition 7.5% forfaitaires, travaux 15% forfaitaires après 5 ans, "
-            "abattements IR (19%) et PS (17.2%) par durée de détention, "
+            f"abattements IR ({pct_fr(IR_PV_IMMOBILIERE, 0)}) et PS ({pct_fr(PS_IMMOBILIER)}) par durée de détention, "
             "exonération résidence principale, taxe sur hautes plus-values (2% à 6%), "
             "réintégration des amortissements pour les biens exploités en LMNP (LF 2025)."
         ),
@@ -3008,7 +3318,7 @@ TOOLS = [
         inputSchema={
             "type": "object",
             "properties": {
-                "annee_declaration": {"type": "integer", "default": 2025, "description": "Année de la déclaration à corriger (ex. 2025 pour revenus 2024)"},
+                "annee_declaration": {"type": "integer", "default": ANNEE_DECLARATION, "description": "Année de la déclaration à corriger (ex. 2026 pour les revenus 2025)"},
                 "type_erreur": {"type": "string", "enum": ["omission_deduction","revenu_omis","erreur_situation_famille","autre"], "default": "omission_deduction"},
                 "montant_impact_estime": {"type": "number", "default": 0, "description": "Montant estimé de l'erreur en euros"},
                 "declaration_deja_soumise": {"type": "boolean", "default": True},
@@ -3040,7 +3350,7 @@ TOOLS = [
     Tool(
         name="comparer_pfu_bareme_capital",
         description=(
-            "Compare la flat tax PFU 30% et le bareme progressif pour les revenus du capital : "
+            f"Compare la flat tax PFU {pct_fr(PFU_CAPITAL)} et le bareme progressif pour les revenus du capital : "
             "dividendes (abattement 40%, CSG ded.), interets, plus-values mobilieres. "
             "Identifie l'option optimale selon votre TMI et calcule l'economie realisee."
         ),
@@ -3347,6 +3657,82 @@ TOOLS = [
             "required": ["salaire_brut_annuel_cdi"],
         },
     ),
+
+    # ── Outils 3.0.0 ──────────────────────────────────────────────────────────
+    Tool(
+        name="calculer_cdhr",
+        description=(
+            f"Calcule la contribution differentielle sur les hauts revenus (CDHR, art. 224 CGI) : "
+            f"imposition minimale de {pct_fr(CDHR_TAUX, 0)} du revenu fiscal de reference retraite "
+            f"au-dela de {CDHR_SEUIL_SEUL // 1000} kEUR (personne seule) ou "
+            f"{CDHR_SEUIL_COUPLE // 1000} kEUR (couple). "
+            "Gere la decote d'entree, les majorations forfaitaires et l'acompte de decembre. "
+            "Perennisee par la LF 2026 jusqu'au retour du deficit public sous 3% du PIB."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "rfr_retraite": {
+                    "type": "number",
+                    "description": "Revenu fiscal de reference retraite (RFR corrige des retraitements de l'art. 224 CGI)",
+                },
+                "situation_famille": {
+                    "type": "string",
+                    "enum": ["celibataire", "marie", "pacse", "divorce", "veuf"],
+                    "default": "celibataire",
+                },
+                "nb_personnes_charge": {
+                    "type": "integer",
+                    "description": "Nombre de personnes a charge (majoration forfaitaire de 1 500 EUR chacune)",
+                    "default": 0,
+                },
+                "impot_revenu_paye": {
+                    "type": "number",
+                    "description": "Impot sur le revenu du foyer (barème + PFU + prelevements liberatoires)",
+                    "default": 0,
+                },
+                "cehr_payee": {
+                    "type": "number",
+                    "description": "CEHR acquittee. Si omise, elle est estimee a partir du RFR.",
+                    "default": 0,
+                },
+            },
+            "required": ["rfr_retraite"],
+        },
+    ),
+    Tool(
+        name="guide_facturation_electronique",
+        description=(
+            "Guide de la reforme de la facturation electronique obligatoire (art. 289 bis CGI) : "
+            "calendrier du 1er septembre 2026 (reception pour toutes les entreprises, emission pour "
+            "les grandes entreprises et ETI) et du 1er septembre 2027 (PME, TPE, micro-entreprises), "
+            "plateformes agreees, formats Factur-X / UBL / CII, e-reporting, mentions obligatoires, "
+            "sanctions et impact sur les auto-entrepreneurs et freelances."
+        ),
+        inputSchema={
+            "type": "object",
+            "properties": {
+                "taille_entreprise": {
+                    "type": "string",
+                    "enum": ["micro_entreprise", "tpe", "pme", "eti", "grande_entreprise"],
+                    "description": "Categorie de l'entreprise : elle determine la date d'obligation d'emission",
+                    "default": "micro_entreprise",
+                },
+                "assujetti_tva": {
+                    "type": "boolean",
+                    "description": "Entreprise assujettie a la TVA (y compris en franchise en base)",
+                    "default": True,
+                },
+                "clients": {
+                    "type": "string",
+                    "enum": ["b2b_france", "b2c", "etranger", "mixte"],
+                    "description": "Type de clientele : la facturation electronique ne concerne que le B2B domestique",
+                    "default": "b2b_france",
+                },
+            },
+            "required": [],
+        },
+    ),
 ]
 
 
@@ -3366,79 +3752,82 @@ async def call_tool(name: str, arguments: Dict[str, Any]) -> List[TextContent]:
 
 
 _TOOL_DISPATCH = {
-    "calculer_impot_revenu":       lambda a: tool_calculer_impot_revenu(a),
+    "calculer_impot_revenu": lambda a: tool_calculer_impot_revenu(a),
     "simuler_tranches_imposition": lambda a: tool_simuler_tranches(a),
-    "optimiser_impots":            lambda a: tool_optimiser_impots(a),
-    "calculer_economie_per":       lambda a: tool_calculer_economie_per(a),
-    "lister_credits_impot":        lambda a: tool_lister_credits(a),
-    "lister_reductions_impot":     lambda a: tool_lister_reductions(a),
-    "lister_deductions_revenu":    lambda a: tool_lister_deductions(a),
+    "optimiser_impots": lambda a: tool_optimiser_impots(a),
+    "calculer_economie_per": lambda a: tool_calculer_economie_per(a),
+    "lister_credits_impot": lambda a: tool_lister_credits(a),
+    "lister_reductions_impot": lambda a: tool_lister_reductions(a),
+    "lister_deductions_revenu": lambda a: tool_lister_deductions(a),
     "lister_epargne_defiscalisante": lambda a: tool_lister_epargne(a),
-    "calculer_quotient_familial":  lambda a: tool_calculer_quotient_familial(a),
-    "guide_frais_reels":           lambda a: tool_guide_frais_reels(a),
-    "calendrier_fiscal":           lambda a: tool_calendrier_fiscal(a),
-    "calculer_plus_values":        lambda a: tool_calculer_plus_values(a),
-    "info_fiscalite_immobilier":   lambda a: tool_info_immobilier(a),
+    "calculer_quotient_familial": lambda a: tool_calculer_quotient_familial(a),
+    "guide_frais_reels": lambda a: tool_guide_frais_reels(a),
+    "calendrier_fiscal": lambda a: tool_calendrier_fiscal(a),
+    "calculer_plus_values": lambda a: tool_calculer_plus_values(a),
+    "info_fiscalite_immobilier": lambda a: tool_info_immobilier(a),
     "analyser_declaration_revenus": lambda a: tool_analyser_declaration(a),
-    "diagnostic_fiscal_complet":   lambda a: tool_diagnostic_complet(a),
-    "guide_maprimerenov":          lambda a: tool_guide_maprimerenov(a),
-    "checker_eligibilite_aides":   lambda a: tool_checker_eligibilite(a),
+    "diagnostic_fiscal_complet": lambda a: tool_diagnostic_complet(a),
+    "guide_maprimerenov": lambda a: tool_guide_maprimerenov(a),
+    "checker_eligibilite_aides": lambda a: tool_checker_eligibilite(a),
     # Nouveaux outils 2026
-    "calculer_ifi":                lambda a: tool_calculer_ifi(a),
-    "optimiser_tns":               lambda a: tool_optimiser_tns(a),
-    "comparer_scenarios":          lambda a: tool_comparer_scenarios(a),
+    "calculer_ifi": lambda a: tool_calculer_ifi(a),
+    "optimiser_tns": lambda a: tool_optimiser_tns(a),
+    "comparer_scenarios": lambda a: tool_comparer_scenarios(a),
     "calculer_prelevement_source": lambda a: tool_calculer_prelevement_source(a),
     # Nouveaux outils 2.1.0
-    "simuler_droits_donation":     lambda a: tool_simuler_droits_donation(a),
-    "calculer_succession":         lambda a: tool_calculer_succession(a),
-    "simuler_scpi":                lambda a: tool_simuler_scpi(a),
+    "simuler_droits_donation": lambda a: tool_simuler_droits_donation(a),
+    "calculer_succession": lambda a: tool_calculer_succession(a),
+    "simuler_scpi": lambda a: tool_simuler_scpi(a),
     # Nouveaux outils 2.2.0 — Fiscalité internationale
     "guide_fiscalite_internationale": lambda a: tool_guide_fiscalite_internationale(a),
-    "calculer_revenu_etranger":       lambda a: tool_calculer_revenu_etranger(a),
-    "guide_frontaliers":              lambda a: tool_guide_frontaliers(a),
+    "calculer_revenu_etranger": lambda a: tool_calculer_revenu_etranger(a),
+    "guide_frontaliers": lambda a: tool_guide_frontaliers(a),
     # Nouveaux outils 2.3.0 — Événements de vie, revenus de remplacement, PER sortie
-    "guide_evenements_vie":           lambda a: tool_guide_evenements_vie(a),
-    "calculer_revenus_remplacement":  lambda a: tool_calculer_revenus_remplacement(a),
-    "simuler_sortie_per":             lambda a: tool_simuler_sortie_per(a),
+    "guide_evenements_vie": lambda a: tool_guide_evenements_vie(a),
+    "calculer_revenus_remplacement": lambda a: tool_calculer_revenus_remplacement(a),
+    "simuler_sortie_per": lambda a: tool_simuler_sortie_per(a),
     # Nouveaux outils 2.4.0 — Crypto, Dutreil, SCI
-    "calculer_fiscalite_crypto":      lambda a: tool_calculer_fiscalite_crypto(a),
-    "simuler_pacte_dutreil":          lambda a: tool_simuler_pacte_dutreil(a),
-    "simuler_sci":                    lambda a: tool_simuler_sci(a),
+    "calculer_fiscalite_crypto": lambda a: tool_calculer_fiscalite_crypto(a),
+    "simuler_pacte_dutreil": lambda a: tool_simuler_pacte_dutreil(a),
+    "simuler_sci": lambda a: tool_simuler_sci(a),
     # Nouveaux outils 2.3.0b — Épargne salariale, IS, Rémunération dirigeant
-    "optimiser_epargne_salariale":    lambda a: tool_optimiser_epargne_salariale(a),
-    "calculer_impot_societes":        lambda a: tool_calculer_impot_societes(a),
+    "optimiser_epargne_salariale": lambda a: tool_optimiser_epargne_salariale(a),
+    "calculer_impot_societes": lambda a: tool_calculer_impot_societes(a),
     "optimiser_remuneration_dirigeant": lambda a: tool_optimiser_remuneration_dirigeant(a),
     # Nouveaux outils 2.4.0 — Retraite, Agriculture, Outre-mer
-    "simuler_depart_retraite":        lambda a: tool_simuler_depart_retraite(a),
-    "guide_fiscalite_agricole":       lambda a: tool_guide_fiscalite_agricole(a),
-    "guide_fiscalite_outremer":       lambda a: tool_guide_fiscalite_outremer(a),
+    "simuler_depart_retraite": lambda a: tool_simuler_depart_retraite(a),
+    "guide_fiscalite_agricole": lambda a: tool_guide_fiscalite_agricole(a),
+    "guide_fiscalite_outremer": lambda a: tool_guide_fiscalite_outremer(a),
     # Nouveaux outils 2.5.0 — Patrimoine, Entreprise, Placements, Indépendants
-    "simuler_assurance_vie":          lambda a: tool_simuler_assurance_vie(a),
-    "simuler_demembrement":           lambda a: tool_simuler_demembrement(a),
-    "simuler_cession_entreprise":     lambda a: tool_simuler_cession_entreprise(a),
-    "simuler_holding":                lambda a: tool_simuler_holding(a),
-    "calculer_tva":                   lambda a: tool_calculer_tva(a),
-    "guide_auto_entrepreneur":        lambda a: tool_guide_auto_entrepreneur(a),
-    "calculer_cfe":                   lambda a: tool_calculer_cfe(a),
-    "simuler_investissement_pea":     lambda a: tool_simuler_investissement_pea(a),
+    "simuler_assurance_vie": lambda a: tool_simuler_assurance_vie(a),
+    "simuler_demembrement": lambda a: tool_simuler_demembrement(a),
+    "simuler_cession_entreprise": lambda a: tool_simuler_cession_entreprise(a),
+    "simuler_holding": lambda a: tool_simuler_holding(a),
+    "calculer_tva": lambda a: tool_calculer_tva(a),
+    "guide_auto_entrepreneur": lambda a: tool_guide_auto_entrepreneur(a),
+    "calculer_cfe": lambda a: tool_calculer_cfe(a),
+    "simuler_investissement_pea": lambda a: tool_simuler_investissement_pea(a),
     "guide_defiscalisation_solidaire": lambda a: tool_guide_defiscalisation_solidaire(a),
-    "calculer_pv_immobiliere":        lambda a: tool_calculer_pv_immobiliere(a),
-    "guide_taxe_fonciere":            lambda a: tool_guide_taxe_fonciere(a),
-    "simuler_reversion_pension":      lambda a: tool_simuler_reversion_pension(a),
-    "guide_revision_declaration":     lambda a: tool_guide_revision_declaration(a),
+    "calculer_pv_immobiliere": lambda a: tool_calculer_pv_immobiliere(a),
+    "guide_taxe_fonciere": lambda a: tool_guide_taxe_fonciere(a),
+    "simuler_reversion_pension": lambda a: tool_simuler_reversion_pension(a),
+    "guide_revision_declaration": lambda a: tool_guide_revision_declaration(a),
     # Nouveaux outils 2.6.0 — Statuts professionnels, Actualite fiscale
     "comparer_statuts_professionnel": lambda a: tool_comparer_statuts_professionnel(a),
-    "verifier_actualite_fiscale":     lambda a: tool_verifier_actualite_fiscale(a),
+    "verifier_actualite_fiscale": lambda a: tool_verifier_actualite_fiscale(a),
     # Nouveaux outils 2.7.0 — Revenus exceptionnels, Capital, LMNP, Rachat trimestres, Exit tax, Loc'Avantages, Micro-foncier
-    "simuler_revenus_exceptionnels":  lambda a: tool_simuler_revenus_exceptionnels(a),
-    "comparer_pfu_bareme_capital":    lambda a: tool_comparer_pfu_bareme_capital(a),
-    "simuler_lmnp":                   lambda a: tool_simuler_lmnp(a),
-    "simuler_rachat_trimestres":      lambda a: tool_simuler_rachat_trimestres(a),
-    "calculer_exit_tax":              lambda a: tool_calculer_exit_tax(a),
-    "guide_loc_avantages":            lambda a: tool_guide_loc_avantages(a),
-    "simuler_micro_foncier":          lambda a: tool_simuler_micro_foncier(a),
+    "simuler_revenus_exceptionnels": lambda a: tool_simuler_revenus_exceptionnels(a),
+    "comparer_pfu_bareme_capital": lambda a: tool_comparer_pfu_bareme_capital(a),
+    "simuler_lmnp": lambda a: tool_simuler_lmnp(a),
+    "simuler_rachat_trimestres": lambda a: tool_simuler_rachat_trimestres(a),
+    "calculer_exit_tax": lambda a: tool_calculer_exit_tax(a),
+    "guide_loc_avantages": lambda a: tool_guide_loc_avantages(a),
+    "simuler_micro_foncier": lambda a: tool_simuler_micro_foncier(a),
     # Nouveaux outils 2.8.0 — Diagnostic passage freelance
     "diagnostiquer_passage_freelance": lambda a: tool_diagnostiquer_passage_freelance(a),
+    # Nouveaux outils 3.0.0
+    "calculer_cdhr": lambda a: tool_calculer_cdhr(a),
+    "guide_facturation_electronique": lambda a: tool_guide_facturation_electronique(a),
 }
 
 
@@ -3464,7 +3853,7 @@ def tool_calculer_impot_revenu(args: Dict) -> str:
     if nb_parts_custom:
         nb_parts = Parts(float(nb_parts_custom), nb_parts.parts_base, nb_parts.foyer)
 
-    # Bug B — Abattement personnes âgées/invalides
+    # Abattement spécial personnes âgées ou invalides (art. 157 bis CGI)
     age = args.get("age_contribuable")
     invalide = args.get("invalide_contribuable", False)
     abattement_special = 0.0
@@ -3474,19 +3863,19 @@ def tool_calculer_impot_revenu(args: Dict) -> str:
     if invalide:
         nb_personnes_abattement += 1
     if nb_personnes_abattement > 0:
-        if rni <= 16_750:
-            abattement_special = nb_personnes_abattement * 2_620
-        elif rni <= 26_970:
-            abattement_special = nb_personnes_abattement * 1_310
+        if rni <= SEUIL_ABATT_PERSONNES_AGEES_1:
+            abattement_special = nb_personnes_abattement * ABATT_PERSONNES_AGEES_PLEIN
+        elif rni <= SEUIL_ABATT_PERSONNES_AGEES_2:
+            abattement_special = nb_personnes_abattement * ABATT_PERSONNES_AGEES_REDUIT
     rni_apres_abattement = max(0, rni - abattement_special)
 
-    # Bug D — choix du barème selon l'année
+    # Barème applicable selon l'année de déclaration
     tranches = TRANCHES_IR_2025 if annee == 2025 else TRANCHES_IR_2026
     annee_label = "2025 (revenus 2024)" if annee == 2025 else ANNEE_FISCALE
 
     res = calculer_ir(rni_apres_abattement, nb_parts, tranches)
 
-    # Bug C — CEHR
+    # Contribution exceptionnelle sur les hauts revenus
     cehr = calculer_cehr(rni, situation)
 
     lines = [
@@ -3517,6 +3906,33 @@ def tool_calculer_impot_revenu(args: Dict) -> str:
             f"- **CEHR (Contribution Exceptionnelle Hauts Revenus) : {cehr:,.0f}€**",
             f"- **Total IR + CEHR : {res['impot_net'] + cehr:,.0f}€**",
         ]
+
+    # CDHR — imposition minimale de 20% des hauts revenus (art. 224 CGI)
+    cdhr = calculer_cdhr(rni, situation, res["impot_net"] + cehr, nb_enfants + nb_enfants_ga)
+    if cdhr["assujetti"]:
+        lines += [
+            "",
+            f"### CDHR — imposition minimale de {pct_fr(CDHR_TAUX, 0)}",
+            f"Votre revenu dépasse le seuil de {cdhr['seuil']:,}€ : la contribution différentielle "
+            "sur les hauts revenus est susceptible de s'appliquer.",
+            f"- Imposition minimale attendue : **{cdhr['impot_cible']:,.0f}€**"
+            + (" (après décote d'entrée)" if cdhr["decote_appliquee"] else ""),
+            f"- Impôts déjà pris en compte (IR + CEHR) : {cdhr['impots_acquittes']:,.0f}€",
+        ]
+        if cdhr["majorations"] > 0:
+            lines.append(f"- Majorations forfaitaires (couple / personnes à charge) : {cdhr['majorations']:,.0f}€")
+        if cdhr["montant"] > 0:
+            lines += [
+                f"- **CDHR estimée : {cdhr['montant']:,.0f}€**",
+                f"- Acompte de {pct_fr(CDHR_ACOMPTE_TAUX, 0)} à verser du {CDHR_ACOMPTE_PERIODE}",
+            ]
+        else:
+            lines.append("- CDHR nulle : votre imposition atteint déjà le minimum de 20%")
+        lines.append(
+            "> Estimation sur la base du revenu net imposable saisi. La CDHR se calcule sur un "
+            "revenu fiscal de référence retraité : utilisez l'outil `calculer_cdhr` pour le détail."
+        )
+
     lines += [
         "",
         "### Détail par tranche",
@@ -3575,7 +3991,7 @@ def tool_simuler_tranches(args: Dict) -> str:
         lines.append(f"| {label} | {taux} | {position} |")
 
     if note:
-        lines += ["", f"ℹ️ {note}"]
+        lines += ["", f"{note}"]
 
     lines += [
         "",
@@ -3604,7 +4020,7 @@ def tool_optimiser_impots(args: Dict) -> str:
     impot = res["impot_net"]
 
     # Calcul plafond PER
-    plafond_per = max(min(rni * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
+    plafond_per = max(min(rni * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX), PLAFOND_PER_MIN)
     plafond_per_restant = max(0, plafond_per - versements_per)
 
     lines = [
@@ -3625,12 +4041,12 @@ def tool_optimiser_impots(args: Dict) -> str:
     if tmi >= 11 and plafond_per_restant > 0:
         economie_per_exemple = min(plafond_per_restant, 3000) * tmi / 100
         lines += [
-            f"#### {prio}. Plan d'Épargne Retraite (PER) ⭐ PRIORITAIRE",
+            f"#### {prio}. Plan d'Épargne Retraite (PER) — PRIORITAIRE",
             f"- Plafond déductible restant : **{plafond_per_restant:,.0f}€**",
             f"- Économie si vous versez 3 000€ : **~{economie_per_exemple:,.0f}€** d'impôt en moins",
             f"- Principe : chaque euro versé économise {tmi:.0f}€ de centimes d'impôt (votre TMI)",
             "- Argent disponible à la retraite (capital ou rente)",
-            "- ✅ À faire avant le **31 décembre** de l'année fiscale",
+            "- À faire avant le **31 décembre** de l'année fiscale",
             "",
         ]
         prio += 1
@@ -3642,7 +4058,7 @@ def tool_optimiser_impots(args: Dict) -> str:
             "- Ménage, jardinage, garde d'enfants, soutien scolaire...",
             "- **50% des dépenses** remboursées en crédit d'impôt",
             "- Plafond : 12 000€ de dépenses (soit 6 000€ de crédit max)",
-            "- ✅ Même si vous ne payez pas d'impôt, le crédit est remboursé",
+            "- Même si vous ne payez pas d'impôt, le crédit est remboursé",
             "",
         ]
         prio += 1
@@ -3661,7 +4077,7 @@ def tool_optimiser_impots(args: Dict) -> str:
             f"#### {prio}. Crédit garde d'enfants hors domicile (crèche/assistante maternelle)",
             "- **50% des frais** de garde en crédit d'impôt",
             "- Plafond : 3 500€ par enfant (soit 1 750€ de crédit max)",
-            "- ✅ Cumulable avec le crédit emploi à domicile",
+            "- Cumulable avec le crédit emploi à domicile",
             "",
         ]
         prio += 1
@@ -3673,7 +4089,7 @@ def tool_optimiser_impots(args: Dict) -> str:
             "- Dons aux Restos du Cœur, Croix-Rouge... : **75%** de réduction (jusqu'à 1 000€ de dons)",
             "- Autres associations reconnues d'utilité publique : **66%**",
             "- Exemple : 100€ de don → 75€ de réduction d'impôt (vous ne débourser que 25€ net)",
-            "- ✅ À déclarer case 7UD/7UF",
+            "- À déclarer case 7UD/7UF",
             "",
         ]
         prio += 1
@@ -3739,8 +4155,8 @@ def tool_optimiser_impots(args: Dict) -> str:
         "| Emploi domicile (5 000€ dépenses) | ~2 500€ (crédit 50%) |",
         "| Dons (200€) | ~150€ (réduction 75%) |",
         "",
-        "> ⚠️ Ces chiffres sont des estimations. Consultez un conseiller fiscal pour votre situation exacte.",
-        "> 📋 Toutes ces stratégies sont **légales** et prévues par le Code Général des Impôts.",
+        "> Ces chiffres sont des estimations. Consultez un conseiller fiscal pour votre situation exacte.",
+        "> Toutes ces stratégies sont **légales** et prévues par le Code Général des Impôts.",
     ]
     return "\n".join(lines)
 
@@ -3755,8 +4171,8 @@ def tool_calculer_economie_per(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     # Plafond PER
-    plafond_per = max(min(revenu_pro * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
-    plafond_effectif = max(plafond_per, PLAFOND_PER_MIN_2025)
+    plafond_per = max(min(revenu_pro * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX), PLAFOND_PER_MIN)
+    plafond_effectif = max(plafond_per, PLAFOND_PER_MIN)
 
     versement_deductible = min(versement, plafond_effectif)
 
@@ -3772,11 +4188,15 @@ def tool_calculer_economie_per(args: Dict) -> str:
         "## Simulation PER — Plan d'Épargne Retraite",
         "",
         f"**Versement envisagé** : {versement:,.0f}€",
-        f"**Plafond déductible 2025** : {plafond_effectif:,.0f}€",
+        f"**Plafond déductible pour un versement en {ANNEE_DECLARATION}** : {plafond_effectif:,.0f}€",
+        f"*(10% des revenus professionnels, plafonné à 8 PASS {ANNEE_DECLARATION - 1}, "
+        f"plancher {PLAFOND_PER_MIN:,}€. Pour un versement effectué en {ANNEE_DECLARATION - 1} et "
+        f"déductible des revenus {ANNEE_REVENUS}, le plafond maximum était de "
+        f"{PLAFOND_PER_MAX_VERSEMENTS_2025:,}€.)*",
     ]
 
     if versement > plafond_effectif:
-        lines.append(f"⚠️ Versement réduit au plafond : {versement_deductible:,.0f}€")
+        lines.append(f"Versement réduit au plafond : {versement_deductible:,.0f}€")
 
     lines += [
         "",
@@ -3801,7 +4221,7 @@ def tool_calculer_economie_per(args: Dict) -> str:
         "- Vous pouvez utiliser les plafonds PER des 3 dernières années non utilisés",
         "- Consultez votre avis d'imposition (rubrique « Plafonds épargne retraite »)",
         "",
-        "⚠️ Vérifiez votre plafond exact sur votre avis d'imposition avant de verser.",
+        "Vérifiez votre plafond exact sur votre avis d'imposition avant de verser.",
     ]
     return "\n".join(lines)
 
@@ -3878,6 +4298,11 @@ def tool_lister_deductions(args: Dict) -> str:
             lines.append(f"- Plafond : {ded['plafond_annuel']:,}€/an")
         if "plafond_enfant_majeur" in ded:
             lines.append(f"- Plafond par enfant majeur : {ded['plafond_enfant_majeur']:,}€")
+        if "forfait_heberge" in ded:
+            lines.append(
+                f"- Enfant majeur hébergé sous votre toit : forfait de "
+                f"{ded['forfait_heberge']:,}€ déductible sans justificatif"
+            )
         if "exemples" in ded:
             lines.append("- Exemples : " + ", ".join(ded["exemples"]))
         if "article" in ded:
@@ -4003,10 +4428,10 @@ def tool_guide_frais_reels(args: Dict) -> str:
         lines.append("")
 
         if indemnite > abattement_auto:
-            lines.append(f"✅ Les frais kilométriques seuls ({indemnite:,.0f}€) dépassent l'abattement automatique ({abattement_auto:,.0f}€).")
+            lines.append(f"Les frais kilométriques seuls ({indemnite:,.0f}€) dépassent l'abattement automatique ({abattement_auto:,.0f}€).")
             lines.append("**Les frais réels sont avantageux pour vous !**")
         else:
-            lines.append(f"ℹ️ Les frais kilométriques ({indemnite:,.0f}€) ne dépassent pas l'abattement automatique.")
+            lines.append(f"Les frais kilométriques ({indemnite:,.0f}€) ne dépassent pas l'abattement automatique.")
             lines.append("Ajoutez les autres frais réels pour comparer.")
 
     lines += [
@@ -4025,7 +4450,7 @@ def tool_guide_frais_reels(args: Dict) -> str:
         "3. Déclarez le montant total case 1AK à la place de l'abattement",
         "4. Conservez tous les justificatifs 3 ans",
         "",
-        "> ⚠️ Les frais réels annulent l'abattement forfaitaire 10% — à vous de choisir le plus avantageux.",
+        "> Les frais réels annulent l'abattement forfaitaire 10% — à vous de choisir le plus avantageux.",
     ]
     return "\n".join(lines)
 
@@ -4036,14 +4461,16 @@ def tool_calendrier_fiscal(args: Dict) -> str:
     lines = [
         "## Calendrier Fiscal 2026 (déclaration des revenus 2025)",
         "",
-        "> ⚠️ Dates estimées — vérifiez les dates exactes sur impots.gouv.fr",
+        "> Dates officielles publiées par la DGFiP. À confirmer sur impots.gouv.fr.",
         "",
     ]
     for evt in CALENDRIER_FISCAL_2026:
         if filtre_urgent and not evt["important"]:
             continue
-        flag = "🔴" if evt["important"] else "📅"
-        lines.append(f"{flag} **{evt['date']}** — {evt['evenement']}")
+        if evt["important"]:
+            lines.append(f"- **{evt['date']}** — {evt['evenement']}")
+        else:
+            lines.append(f"- {evt['date']} — {evt['evenement']}")
 
     lines += [
         "",
@@ -4070,29 +4497,29 @@ def tool_calculer_plus_values(args: Dict) -> str:
     ]
 
     if type_actif == "actions_hors_pea":
-        ir = pv * 0.128  # 12,8% PFU
-        ps = pv * 0.172  # 17,2% PS
+        ir = pv * PFU_IR
+        ps = pv * PS_CAPITAL
         total = ir + ps
         lines += [
             "### Fiscalité des actions (hors PEA)",
-            "**Prélèvement Forfaitaire Unique (PFU) = 30%** (flat tax)",
-            f"- IR 12,8% : {ir:,.0f}€",
-            f"- Prélèvements sociaux 17,2% : {ps:,.0f}€",
+            f"**Prélèvement Forfaitaire Unique (PFU) = {pct_fr(PFU_CAPITAL)}** (flat tax)",
+            f"- IR {pct_fr(PFU_IR)} : {ir:,.0f}€",
+            f"- Prélèvements sociaux {pct_fr(PS_CAPITAL)} : {ps:,.0f}€",
             f"- **Total : {total:,.0f}€**",
             "",
             "### Alternative : barème progressif",
-            "Vous pouvez opter pour le barème progressif si votre TMI est inférieur à 12,8%",
+            f"Vous pouvez opter pour le barème progressif si votre TMI est inférieur à {pct_fr(PFU_IR)}",
             "(Option globale — s'applique à tous vos revenus du capital)",
             "",
             "### Conseil : Utilisez le PEA !",
-            "- Après 5 ans, les plus-values sont exonérées d'IR (seulement 17,2% de PS)",
+            f"- Après 5 ans, les plus-values sont exonérées d'IR (seulement {pct_fr(PS_CAPITAL)} de PS)",
             f"- Économie si PEA : {ir:,.0f}€ d'IR économisé",
         ]
 
     elif type_actif == "immobilier_residence_principale":
         lines += [
             "### Plus-value résidence principale",
-            "✅ **EXONÉRÉE** d'impôt et de prélèvements sociaux",
+            "**EXONÉRÉE** d'impôt et de prélèvements sociaux",
             "Conditions : logement constituait votre résidence principale au jour de la cession",
             "",
             "Cette exonération est totale, quel que soit le montant de la plus-value.",
@@ -4113,7 +4540,7 @@ def tool_calculer_plus_values(args: Dict) -> str:
         pv_imposable_ir = pv * (1 - abatt_ir)
         pv_imposable_ps = pv * (1 - abatt_ps)
         ir = pv_imposable_ir * 0.19
-        ps = pv_imposable_ps * 0.172
+        ps = pv_imposable_ps * PS_IMMOBILIER
         total = ir + ps
 
         lines += [
@@ -4121,7 +4548,7 @@ def tool_calculer_plus_values(args: Dict) -> str:
             f"- Abattement IR après {duree:.0f} ans : {abatt_ir*100:.0f}%",
             f"- Base imposable IR : {pv_imposable_ir:,.0f}€ → IR à 19% : {ir:,.0f}€",
             f"- Abattement PS après {duree:.0f} ans : {abatt_ps*100:.0f}%",
-            f"- Base imposable PS : {pv_imposable_ps:,.0f}€ → PS à 17,2% : {ps:,.0f}€",
+            f"- Base imposable PS : {pv_imposable_ps:,.0f}€ → PS à {pct_fr(PS_IMMOBILIER)} : {ps:,.0f}€",
             f"- **Total impôts : {total:,.0f}€**",
             "",
             "### Exonérations selon durée de détention",
@@ -4131,12 +4558,12 @@ def tool_calculer_plus_values(args: Dict) -> str:
         ]
 
     elif type_actif == "cryptomonnaie":
-        taux = 0.30  # PFU 30%
+        taux = PFU_CAPITAL
         total = pv * taux
         lines += [
             "### Fiscalité des cryptomonnaies",
-            "**PFU 30%** sur les cessions (flat tax depuis 2023)",
-            f"- Impôt : {pv:,.0f}€ × 30% = **{total:,.0f}€**",
+            f"**PFU {pct_fr(PFU_CAPITAL)}** sur les cessions (flat tax depuis 2023)",
+            f"- Impôt : {pv:,.0f}€ × {pct_fr(PFU_CAPITAL)} = **{total:,.0f}€**",
             "",
             "### Important pour les crypto",
             "- Imposable uniquement lors de la **conversion en euros** (ou autre monnaie fiat)",
@@ -4282,45 +4709,47 @@ def tool_checker_eligibilite(args: Dict) -> str:
     # LEP — seuils 2026 (source : service-public.fr)
     seuil_lep = plafond_lep(nb_parts)
     if rfr <= seuil_lep:
-        lines.append(f"✅ **LEP** : Vous êtes éligible ! Ouvrez un Livret d'Épargne Populaire ({pct_fr(TAUX_LEP)}, plafond 10 000€)")
+        lines.append(f"**LEP** : Vous êtes éligible ! Ouvrez un Livret d'Épargne Populaire ({pct_fr(TAUX_LEP)}, plafond 10 000€)")
     else:
-        lines.append(f"❌ **LEP** : Non éligible (RFR {rfr:,.0f}€ > seuil {seuil_lep:,.0f}€)")
+        lines.append(f"**LEP** : Non éligible (RFR {rfr:,.0f}€ > seuil {seuil_lep:,.0f}€)")
 
     # Non-imposition
     if rfr_par_part < 11_497:
-        lines.append(f"✅ **Non-imposition** : Vous n'êtes probablement pas imposable (RFR/part < 11 497€)")
+        lines.append(f"**Non-imposition** : Vous n'êtes probablement pas imposable (RFR/part < 11 497€)")
     else:
-        lines.append(f"ℹ️ **Imposition** : Vous êtes probablement imposable")
+        lines.append(f"**Imposition** : Vous êtes probablement imposable")
 
     # Décote
     impot_estime = calculer_ir(rfr, nb_parts)
     if impot_estime["decote"] > 0:
-        lines.append(f"✅ **Décote** : Vous bénéficiez d'une décote ({impot_estime['decote']:,.0f}€)")
+        lines.append(f"**Décote** : Vous bénéficiez d'une décote ({impot_estime['decote']:,.0f}€)")
 
     # Personnes âgées
     if age and age >= 65:
         lines += [
-            f"✅ **Abattement personnes âgées** : +2 620€ d'abattement si RFR ≤ 16 410€",
-            "   ou +1 310€ si RFR entre 16 410€ et 26 330€ (par personne de 65 ans et +)",
+            f"**Abattement personnes âgées** : +{ABATT_PERSONNES_AGEES_PLEIN:,}€ d'abattement "
+            f"si le revenu net global n'excède pas {SEUIL_ABATT_PERSONNES_AGEES_1:,}€",
+            f"   ou +{ABATT_PERSONNES_AGEES_REDUIT:,}€ jusqu'à {SEUIL_ABATT_PERSONNES_AGEES_2:,}€ "
+            "(par personne de 65 ans et plus)",
         ]
 
     # Prime d'activité (estimation grossière)
     if rfr < 25_000 and situation in ["celibataire", "divorce"]:
-        lines.append("ℹ️ **Prime d'activité** : Simulez sur caf.fr — potentiellement éligible selon vos revenus d'activité")
+        lines.append("**Prime d'activité** : Simulez sur caf.fr — potentiellement éligible selon vos revenus d'activité")
     elif rfr < 40_000:
-        lines.append("ℹ️ **Prime d'activité** : Simulez sur caf.fr pour votre situation exacte")
+        lines.append("**Prime d'activité** : Simulez sur caf.fr pour votre situation exacte")
 
     # Chèque énergie
     seuil_cheque_energie = {1: 11_000, 2: 15_500, 3: 19_000, 4: 22_500}
     seuil_ce = seuil_cheque_energie.get(int(nb_parts), 11_000 + int(nb_parts)*3_500)
     if rfr <= seuil_ce:
-        lines.append(f"✅ **Chèque énergie** : Vous devriez recevoir un chèque énergie automatiquement (envoyé par l'État)")
+        lines.append(f"**Chèque énergie** : Vous devriez recevoir un chèque énergie automatiquement (envoyé par l'État)")
     else:
-        lines.append(f"❌ **Chèque énergie** : Probablement non éligible (RFR {rfr:,.0f}€ > seuil estimé)")
+        lines.append(f"**Chèque énergie** : Probablement non éligible (RFR {rfr:,.0f}€ > seuil estimé)")
 
     # Aide juridictionnelle
     if rfr < 12_271:
-        lines.append("✅ **Aide juridictionnelle** : Probablement éligible (accès gratuit à la justice)")
+        lines.append("**Aide juridictionnelle** : Probablement éligible (accès gratuit à la justice)")
 
     lines += [
         "",
@@ -4329,7 +4758,7 @@ def tool_checker_eligibilite(args: Dict) -> str:
         "- **caf.fr** : droits CAF (APL, prime activité, allocations familiales)",
         "- **impots.gouv.fr** : votre espace personnel et votre RFR exact",
         "",
-        "> ⚠️ Ces vérifications sont indicatives. Consultez impots.gouv.fr et caf.fr pour confirmation.",
+        "> Ces vérifications sont indicatives. Consultez impots.gouv.fr et caf.fr pour confirmation.",
     ]
     return "\n".join(lines)
 
@@ -4457,7 +4886,7 @@ def tool_analyser_declaration(args: Dict) -> str:
     if not frais1 and sal1 > 0:
         seuil_fr = sal1 * 0.10
         alertes.append(
-            f"❓ **Frais réels non déclarés** (déclarant 1) : si vos frais réels dépassent "
+            f"**Frais réels non déclarés** (déclarant 1) : si vos frais réels dépassent "
             f"{seuil_fr:,.0f}€ (10% de {sal1:,.0f}€), l'option frais réels est avantageuse. "
             "Vérifiez vos frais de transport, repas, formation."
         )
@@ -4465,43 +4894,43 @@ def tool_analyser_declaration(args: Dict) -> str:
     if not frais2 and sal2 > 0:
         seuil_fr2 = sal2 * 0.10
         alertes.append(
-            f"❓ **Frais réels non déclarés** (déclarant 2) : vérifiez si vos frais dépassent {seuil_fr2:,.0f}€."
+            f"**Frais réels non déclarés** (déclarant 2) : vérifiez si vos frais dépassent {seuil_fr2:,.0f}€."
         )
 
     # PER
-    plafond_per_est = max(min(total_salaires * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
+    plafond_per_est = max(min(total_salaires * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX), PLAFOND_PER_MIN)
     if total_per < plafond_per_est * 0.5:
         pot = plafond_per_est - total_per
         conseils.append(
-            f"💡 **PER sous-utilisé** : votre plafond estimé est {plafond_per_est:,.0f}€, "
+            f"**PER sous-utilisé** : votre plafond estimé est {plafond_per_est:,.0f}€, "
             f"vous n'avez versé que {total_per:,.0f}€. "
             f"Il reste {pot:,.0f}€ de plafond pour réduire votre impôt. "
             "(Consultez votre avis d'imposition pour le plafond exact)"
         )
     elif total_per == 0:
         conseils.append(
-            f"💡 **Aucun versement PER** : pensez au PER pour réduire votre revenu imposable. "
+            f"**Aucun versement PER** : pensez au PER pour réduire votre revenu imposable. "
             f"Plafond estimé : {plafond_per_est:,.0f}€."
         )
 
     # Garde d'enfants
     if garde == 0 and nb_enfants > 0:
         alertes.append(
-            "❓ **Garde d'enfants non déclarée** (case 7DB) : si vous avez des enfants < 6 ans "
+            "**Garde d'enfants non déclarée** (case 7DB) : si vous avez des enfants < 6 ans "
             "en crèche ou chez assistante maternelle, déclarez les frais pour obtenir 50% en crédit d'impôt."
         )
 
     # Emploi domicile
     if domicile == 0:
         conseils.append(
-            "💡 **Emploi à domicile** (case 7DF) : ménage, jardinage, garde d'enfants, soutien scolaire... "
+            "**Emploi à domicile** (case 7DF) : ménage, jardinage, garde d'enfants, soutien scolaire... "
             "50% de crédit d'impôt. Si vous utilisez ces services, déclarez-les !"
         )
 
     # Dons
     if dons_75 == 0 and dons_66 == 0:
         conseils.append(
-            "💡 **Dons non déclarés** (cases 7UD/7UF) : si vous avez fait des dons à des associations, "
+            "**Dons non déclarés** (cases 7UD/7UF) : si vous avez fait des dons à des associations, "
             "ils donnent droit à 75% ou 66% de réduction. Vérifiez vos reçus fiscaux."
         )
 
@@ -4510,7 +4939,7 @@ def tool_analyser_declaration(args: Dict) -> str:
         loyers_bruts = float(args.get("case_4BE", 0))
         if loyers_bruts > 15_000:
             alertes.append(
-                f"⚠️ **Micro-foncier impossible** : vos loyers ({loyers_bruts:,.0f}€) dépassent "
+                f"**Micro-foncier impossible** : vos loyers ({loyers_bruts:,.0f}€) dépassent "
                 "15 000€. Vous devez obligatoirement déclarer au régime réel (case 4BA). "
                 "Au réel vous pouvez déduire toutes vos charges réelles."
             )
@@ -4520,7 +4949,7 @@ def tool_analyser_declaration(args: Dict) -> str:
         seuil_lep = plafond_lep(nb_parts)
         if rfr <= seuil_lep:
             conseils.append(
-                f"✅ **LEP éligible** : votre RFR ({rfr:,.0f}€) vous permet d'ouvrir un "
+                f"**LEP éligible** : votre RFR ({rfr:,.0f}€) vous permet d'ouvrir un "
                 f"Livret d'Épargne Populaire ({pct_fr(TAUX_LEP)}, exonéré, plafond 10 000€)."
             )
 
@@ -4532,7 +4961,7 @@ def tool_analyser_declaration(args: Dict) -> str:
         lines.append("")
 
     if not alertes and not conseils:
-        lines.append("✅ Votre déclaration semble bien optimisée avec les données fournies.")
+        lines.append("Votre déclaration semble bien optimisée avec les données fournies.")
 
     lines += [
         "---",
@@ -4542,7 +4971,7 @@ def tool_analyser_declaration(args: Dict) -> str:
         "2. Utilisez `calculer_economie_per` pour simuler un versement PER",
         "3. Utilisez `guide_maprimerenov` si vous êtes propriétaire avec travaux à envisager",
         "",
-        "> ⚠️ Cette analyse est basée sur les données fournies. Consultez impots.gouv.fr ou un conseiller fiscal.",
+        "> Cette analyse est basée sur les données fournies. Consultez impots.gouv.fr ou un conseiller fiscal.",
     ]
     return "\n".join(lines)
 
@@ -4625,13 +5054,13 @@ def tool_diagnostic_complet(args: Dict) -> str:
 
     # ── 1. PER ──────────────────────────────────────────────────────────────
     if tmi >= 11:
-        plafond_per = max(min(salaire * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
+        plafond_per = max(min(salaire * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX), PLAFOND_PER_MIN)
         restant_per = max(0, plafond_per - versements_per)
         if restant_per > 500:
             economie_per = min(restant_per, 5000) * tmi / 100
             economies_totales += economie_per
             lines += [
-                f"### {prio}. Plan d'Épargne Retraite (PER) — PRIORITAIRE ⭐",
+                f"### {prio}. Plan d'Épargne Retraite (PER) — PRIORITAIRE",
                 f"- Plafond disponible : **{restant_per:,.0f}€**",
                 f"- Économie si versement de 5 000€ : **~{economie_per:,.0f}€**",
                 f"- Chaque euro versé économise **{tmi:.0f} centimes** d'impôt (votre TMI)",
@@ -4658,7 +5087,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
 
         if aide_estimee > 0 or "proprietaire" in statut_logement:
             lines += [
-                f"### {prio}. MaPrimeRénov' — Travaux de rénovation énergétique 🏠",
+                f"### {prio}. MaPrimeRénov' — Travaux de rénovation énergétique",
                 f"- **Votre catégorie** : {cat_info['label']}",
             ]
             if not eligible_geste:
@@ -4676,10 +5105,10 @@ def tool_diagnostic_complet(args: Dict) -> str:
                     "- Utilisez `guide_maprimerenov` pour simuler vos travaux précis",
                 ]
             if dpe in ["E", "F", "G", "inconnu"] or annee_construction and annee_construction < 1990:
-                lines.append("- ⚡ Votre logement semble potentiellement éligible à des travaux prioritaires")
+                lines.append("- Votre logement semble potentiellement éligible à des travaux prioritaires")
             if travaux_recents:
                 lines.append(
-                    "- ⚠️ Travaux déjà réalisés récemment : vérifiez qu'ils ont bien été déclarés "
+                    "- Travaux déjà réalisés récemment : vérifiez qu'ils ont bien été déclarés "
                     "et que les factures RGE sont conservées (contrôle possible pendant 3 ans)"
                 )
             lines += [
@@ -4707,7 +5136,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
         economie_dom = dep_domicile * 0.50
         economies_totales += economie_dom
         lines += [
-            f"### {prio}. Emploi à domicile — Vous êtes sur la bonne voie ✅",
+            f"### {prio}. Emploi à domicile — Vous êtes sur la bonne voie",
             f"- Dépenses déclarées : {dep_domicile:,.0f}€ → crédit d'impôt {economie_dom:,.0f}€",
             "- Vérifiez que toutes vos dépenses sont bien déclarées",
             "",
@@ -4737,7 +5166,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
             ]
             if frais_km > abatt_auto:
                 lines.append(f"- Frais kilométriques estimés ({km_annuels:,.0f} km) : **{frais_km:,.0f}€ > abattement auto {abatt_auto:,.0f}€**")
-                lines.append("- ✅ L'option frais réels semble avantageuse pour vous !")
+                lines.append("- L'option frais réels semble avantageuse pour vous !")
             if teletravail >= 3:
                 lines.append(f"- Télétravail {teletravail:.0f}j/sem : déduisez internet, bureau à domicile, matériel")
             lines += [
@@ -4816,7 +5245,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
         f"|--------|-----------------|",
     ]
     if tmi >= 11:
-        plafond_per2 = max(min(salaire * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
+        plafond_per2 = max(min(salaire * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX), PLAFOND_PER_MIN)
         lines.append(f"| PER (5 000€ versés) | ~{5000*tmi/100:,.0f}€ d'impôt |")
     if "proprietaire" in statut_logement and travaux_envisages:
         lines.append(f"| MaPrimeRénov' | Subvention non fiscale (aide directe) |")
@@ -4826,7 +5255,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
         "| Emploi à domicile (200€/mois) | ~1 200€ crédit d'impôt |",
         "| Dons 200€ (75%) | ~150€ réduction d'impôt |",
         "",
-        "> 💡 **Total potentiel** : plusieurs milliers d'euros selon votre situation",
+        "> **Total potentiel** : plusieurs milliers d'euros selon votre situation",
         "",
         "---",
         "",
@@ -4843,7 +5272,7 @@ def tool_diagnostic_complet(args: Dict) -> str:
         "- Si patrimoine immobilier > 1,3M€ → `calculer_ifi`",
         "- Si indépendant / TNS → `optimiser_tns`",
         "",
-        "> ⚠️ Ce rapport est indicatif. Les montants réels dépendent de votre situation exacte.",
+        "> Ce rapport est indicatif. Les montants réels dépendent de votre situation exacte.",
         "> Consultez impots.gouv.fr pour votre déclaration officielle.",
     ]
     return "\n".join(lines)
@@ -4884,7 +5313,7 @@ def tool_calculer_ifi(args: Dict) -> str:
 
     if patrimoine_net < IFI_SEUIL_ENTREE:
         lines += [
-            f"✅ **Pas d'IFI** : votre patrimoine net ({patrimoine_net:,.0f}€) est inférieur au seuil de {IFI_SEUIL_ENTREE:,}€.",
+            f"**Pas d'IFI** : votre patrimoine net ({patrimoine_net:,.0f}€) est inférieur au seuil de {IFI_SEUIL_ENTREE:,}€.",
             "",
             f"Il faudrait {IFI_SEUIL_ENTREE - patrimoine_net:,.0f}€ de patrimoine net supplémentaire pour être assujetti.",
         ]
@@ -4930,7 +5359,7 @@ def tool_calculer_ifi(args: Dict) -> str:
             "- **SCPI de rendement** : certaines structures permettent une optimisation",
             "- **LMP** : si statuts LMP remplis, les biens professionnels sont exonérés",
             "",
-            "> ⚠️ L'IFI est déclaré avec votre déclaration de revenus (formulaire 2042-IFI).",
+            "> L'IFI est déclaré avec votre déclaration de revenus (formulaire 2042-IFI).",
             "> Consultez un notaire ou conseiller en gestion de patrimoine pour votre situation exacte.",
         ]
     return "\n".join(lines)
@@ -4990,15 +5419,15 @@ def tool_optimiser_tns(args: Dict) -> str:
             "",
         ]
         if charges > ca * abatt:
-            lines.append(f"✅ **Le régime réel est plus avantageux** : vos charges réelles ({charges:,.0f}€) dépassent l'abattement micro ({ca*abatt:,.0f}€).")
+            lines.append(f"**Le régime réel est plus avantageux** : vos charges réelles ({charges:,.0f}€) dépassent l'abattement micro ({ca*abatt:,.0f}€).")
         elif charges > 0:
-            lines.append(f"ℹ️ Le régime micro est avantageux : abattement ({ca*abatt:,.0f}€) > charges réelles ({charges:,.0f}€).")
+            lines.append(f"Le régime micro est avantageux : abattement ({ca*abatt:,.0f}€) > charges réelles ({charges:,.0f}€).")
         else:
-            lines.append("ℹ️ Sans données de charges, le micro est souvent avantageux si charges < abattement.")
+            lines.append("Sans données de charges, le micro est souvent avantageux si charges < abattement.")
         lines.append("")
     else:
         if regime_micro:
-            lines.append(f"⚠️ **Micro non éligible** : CA {ca:,.0f}€ > seuil {regime_micro.get('seuil_ca', 0):,}€. Régime réel obligatoire.")
+            lines.append(f"**Micro non éligible** : CA {ca:,.0f}€ > seuil {regime_micro.get('seuil_ca', 0):,}€. Régime réel obligatoire.")
         benefice_reel = max(0, ca - charges - cotis_actuelles)
         ir_reel = calculer_ir(benefice_reel, nb_parts)["impot_net"]
         lines += [
@@ -5009,8 +5438,8 @@ def tool_optimiser_tns(args: Dict) -> str:
 
     # ── PER TNS ─────────────────────────────────────────────────────────────
     benefice_ref = max(0, ca - charges - cotis_actuelles) if not micro_eligible else ca * (1 - regime_micro.get("abattement", 0.34))
-    plafond_per = max(min(benefice_ref * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX_2025), PLAFOND_PER_MIN_2025)
-    plafond_per = max(plafond_per, PLAFOND_PER_MIN_2025)
+    plafond_per = max(min(benefice_ref * PLAFOND_PER_POURCENTAGE, PLAFOND_PER_MAX), PLAFOND_PER_MIN)
+    plafond_per = max(plafond_per, PLAFOND_PER_MIN)
     tmi = calculer_ir(benefice_ref, nb_parts)["taux_marginal"]
 
     lines += [
@@ -5028,9 +5457,9 @@ def tool_optimiser_tns(args: Dict) -> str:
         plafond_mad = min(benefice_ref * mad["taux"], mad["max_pass"] * PASS_ANNEE_COURANTE * mad["taux"])
         lines.append(f"- **{mad['description']}** : plafond ~{plafond_mad:,.0f}€/an (déductible du bénéfice)")
     if not a_madelin:
-        lines.append("\n💡 Vous n'avez pas de contrats Madelin — à envisager pour optimiser prévoyance + déduction fiscale.")
+        lines.append("\nVous n'avez pas de contrats Madelin — à envisager pour optimiser prévoyance + déduction fiscale.")
     else:
-        lines.append(f"\n✅ Madelin existant : {cotis_madelin:,.0f}€/an — vérifiez que vous utilisez bien votre plafond.")
+        lines.append(f"\nMadelin existant : {cotis_madelin:,.0f}€/an — vérifiez que vous utilisez bien votre plafond.")
     lines.append("")
 
     # ── ACRE ────────────────────────────────────────────────────────────────
@@ -5054,10 +5483,10 @@ def tool_optimiser_tns(args: Dict) -> str:
         "| **EURL à l'IS** | ~45% rémunération | IS 15%/25% + IR dividendes | Optimisation rémunération |",
         "| **SASU** | ~75% rémunération (salarié) | IS 15%/25% | Protection sociale salarié |",
         "",
-        "> 💡 EURL/SASU à l'IS : vous pouvez optimiser la répartition rémunération/dividendes.",
-        "> Dividendes : PFU 30% (flat tax) — souvent plus avantageux si TMI > 30%.",
+        "> EURL/SASU à l'IS : vous pouvez optimiser la répartition rémunération/dividendes.",
+        f"> Dividendes : PFU {pct_fr(PFU_CAPITAL)} (flat tax), souvent plus avantageux si TMI > 30%.",
         "",
-        "> ⚠️ Consultez un expert-comptable pour le choix de structure adapté à votre situation.",
+        "> Consultez un expert-comptable pour le choix de structure adapté à votre situation.",
     ]
     return "\n".join(lines)
 
@@ -5155,7 +5584,7 @@ def tool_comparer_scenarios(args: Dict) -> str:
 
     lines += [
         "",
-        "> ⚠️ Simulation indicative — consultez impots.gouv.fr ou un conseiller fiscal pour validation.",
+        "> Simulation indicative — consultez impots.gouv.fr ou un conseiller fiscal pour validation.",
     ]
     return "\n".join(lines)
 
@@ -5178,16 +5607,12 @@ def tool_calculer_prelevement_source(args: Dict) -> str:
     # Retenue mensuelle sur salaire
     retenue_mensuelle = salaire_mensuel * taux_perso / 100
 
-    # Taux neutre (grille officielle simplifiée — célibataire)
-    TAUX_NEUTRES = [
-        (1_456, 0.0), (1_518, 0.5), (1_580, 1.5), (1_650, 2.5), (1_722, 3.5),
-        (1_803, 4.5), (1_988, 6.0), (2_243, 7.5), (2_568, 9.0), (2_920, 10.5),
-        (3_317, 12.0), (3_734, 13.5), (4_506, 15.0), (5_708, 17.5), (7_111, 20.0),
-        (9_218, 22.5), (11_877, 25.0), (18_234, 30.0), (float("inf"), 38.0),
-    ]
-    taux_neutre = 0.0
-    for seuil, taux in TAUX_NEUTRES:
-        if salaire_mensuel <= seuil:
+    # Taux par défaut (grille officielle BOI-BAREME-000037)
+    zone = args.get("zone", "metropole")
+    grille = TAUX_NEUTRES_PAS.get(zone, TAUX_NEUTRES_PAS["metropole"])
+    taux_neutre = grille[-1][1]
+    for borne, taux in grille:
+        if borne is None or salaire_mensuel < borne:
             taux_neutre = taux
             break
 
@@ -5203,7 +5628,11 @@ def tool_calculer_prelevement_source(args: Dict) -> str:
         f"| Type de taux | Valeur | Retenue mensuelle |",
         f"|--------------|--------|-------------------|",
         f"| **Taux personnalisé** (foyer fiscal) | **{taux_perso:.1f}%** | **{retenue_mensuelle:,.0f}€/mois** |",
-        f"| Taux neutre (célibataire, sans info) | {taux_neutre:.1f}% | {salaire_mensuel * taux_neutre / 100:,.0f}€/mois |",
+        f"| Taux par défaut, dit neutre ({zone.replace('_', ' ')}) | {taux_neutre:.1f}% | {salaire_mensuel * taux_neutre / 100:,.0f}€/mois |",
+        "",
+        f"> Grille des taux par défaut en vigueur depuis le {PAS_DATE_GRILLE} "
+        f"(BOI-BAREME-000037). Abattement pour les contrats courts de moins de deux mois : "
+        f"{PAS_ABATTEMENT_CONTRAT_COURT}€ par mois.",
         "",
         "### Acomptes sur revenus complémentaires",
     ]
@@ -5233,20 +5662,28 @@ def tool_calculer_prelevement_source(args: Dict) -> str:
         "- Si vous anticipez un revenu exceptionnel (prime, cession, revenus locatifs...)",
         "- Evite une régularisation importante en septembre N+1",
         "",
-        "**Opter pour le taux individualisé** (couples) :",
-        "- Chaque conjoint paie en fonction de son propre revenu",
-        "- Avantageux si forte disparité de revenus dans le couple",
+        "**Taux individualisé** (couples mariés ou pacsés) :",
+        f"- Depuis le {PAS_TAUX_INDIVIDUALISE_DEFAUT_DEPUIS}, le taux individualisé est appliqué "
+        "**par défaut** : chaque conjoint est prélevé selon ses propres revenus",
+        "- Le montant total dû par le foyer est inchangé, seule la répartition entre conjoints varie",
+        "- Il faut désormais faire la démarche inverse pour **revenir au taux du foyer** "
+        "(option à formuler sur impots.gouv.fr)",
         "",
         "**Opter pour le taux neutre** :",
         "- Utile pour ne pas communiquer votre taux à votre employeur",
         "- Vous devrez alors payer la différence directement à l'administration",
         "",
         "### Calendrier du PAS",
-        "- **Janvier** : nouveau taux personnalisé calculé par l'administration (sur revenus N-2)",
-        "- **Septembre** : mise à jour du taux avec la déclaration de revenus N-1",
-        "- **Régularisation** : si trop ou trop peu prélevé, ajustement en septembre",
+        f"- **{PAS_DATE_NOUVEAU_TAUX}** : entrée en vigueur du taux issu de la déclaration des "
+        f"revenus {ANNEE_REVENUS}. De janvier à août, le taux appliqué reposait sur les revenus "
+        f"{ANNEE_REVENUS - 1}",
+        "- **Janvier** : reconduction du taux de septembre, sauf modulation",
+        "- **1er mai** : actualisation annuelle de la grille des taux par défaut",
+        "- **25 septembre** : prélèvement du solde d'impôt restant dû. Au-delà de 300€, "
+        "étalement automatique en quatre échéances jusqu'au 28 décembre",
+        "- Une modulation reste possible à tout moment et prend effet le mois suivant",
         "",
-        "> ℹ️ Votre taux personnalisé exact figure sur votre avis d'imposition ou sur impots.gouv.fr.",
+        "> Votre taux personnalisé exact figure sur votre avis d'imposition ou sur impots.gouv.fr.",
     ]
     return "\n".join(lines)
 
@@ -5318,7 +5755,7 @@ def tool_simuler_droits_donation(args: Dict) -> str:
 
     if base_taxable <= 0:
         lines += [
-            f"✅ **Aucun droit à payer** — la donation est entièrement couverte par les abattements.",
+            f"**Aucun droit à payer** — la donation est entièrement couverte par les abattements.",
             f"Reste d'abattement non utilisé : {abattement_dispo - montant:,.0f}€",
         ]
     else:
@@ -5350,7 +5787,7 @@ def tool_simuler_droits_donation(args: Dict) -> str:
         ]
     lines += [
         "",
-        "> ⚠️ La donation doit être déclarée (formulaire 2735) dans le mois suivant.",
+        "> La donation doit être déclarée (formulaire 2735) dans le mois suivant.",
         "> Consultez un notaire pour les donations importantes.",
     ]
     return "\n".join(lines)
@@ -5385,7 +5822,7 @@ def tool_calculer_succession(args: Dict) -> str:
 
         # Exonération totale conjoint/PACS
         if config_succ.get("note") == "EXONÉRÉ totalement":
-            recap_rows.append(f"| {config_succ['label']} (×{nb}) | — | 0€ | ✅ EXONÉRÉ |")
+            recap_rows.append(f"| {config_succ['label']} (×{nb}) | — | 0€ | EXONÉRÉ |")
             continue
 
         # Part reçue (division égale entre héritiers du même rang — simplifiée)
@@ -5424,7 +5861,7 @@ def tool_calculer_succession(args: Dict) -> str:
         "- **SCI familiale** : abattement pour défaut de liquidité (~15-20%)",
         "- **Pacte Dutreil** : exonération 75% sur transmission d'entreprise",
         "",
-        "> ⚠️ La succession doit être déclarée dans les 6 mois (délai porté à 12 mois si décès à l'étranger).",
+        "> La succession doit être déclarée dans les 6 mois (délai porté à 12 mois si décès à l'étranger).",
         "> Consultez un notaire — les règles varient selon la composition de la famille et les régimes matrimoniaux.",
     ]
     if av_hors_succ > 0:
@@ -5479,10 +5916,10 @@ def tool_simuler_scpi(args: Dict) -> str:
             f"- Gain de valeur à terme : **{gain_terme:,.0f}€** (non imposable si résidence principale non applicable)",
             "",
             "### Avantages fiscaux nue-propriété",
-            "✅ **Aucun revenu taxable** pendant la durée du démembrement",
-            "✅ **Non soumis à l'IFI** (valeur nue-propriété non retenue pour l'usufruitier)",
-            "✅ **Plus-value à terme** calculée sur la valeur pleine propriété (durée détention depuis achat NP)",
-            f"✅ **Rendement implicite** : {gain_terme/valeur_np/duree_nue*100:.2f}%/an (gain capitalistique)",
+            "**Aucun revenu taxable** pendant la durée du démembrement",
+            "**Non soumis à l'IFI** (valeur nue-propriété non retenue pour l'usufruitier)",
+            "**Plus-value à terme** calculée sur la valeur pleine propriété (durée détention depuis achat NP)",
+            f"**Rendement implicite** : {gain_terme/valeur_np/duree_nue*100:.2f}%/an (gain capitalistique)",
             "",
             "> Idéal si vous êtes fortement imposé et n'avez pas besoin de revenus complémentaires immédiats.",
         ]
@@ -5501,12 +5938,12 @@ def tool_simuler_scpi(args: Dict) -> str:
             "**Au rachat (après 8 ans)** :",
             f"- Abattement annuel : {abatt_annuel:,}€ sur les gains",
             "- Taux IR sur gains : 7,5% (PFU réduit) jusqu'à 150 000€ de versements",
-            "- Prélèvements sociaux : 17,2% (sur la part gains du rachat)",
+            f"- Prélèvements sociaux : {pct_fr(PS_ASSURANCE_VIE)} (sur la part gains du rachat)",
             "",
             "**Avantages**",
-            "✅ Pas de fiscalité annuelle → effet de capitalisation",
-            "✅ Transmission hors succession (152 500€/bénéficiaire exonéré)",
-            "✅ Souplesse : rachats partiels possibles",
+            "Pas de fiscalité annuelle → effet de capitalisation",
+            "Transmission hors succession (152 500€/bénéficiaire exonéré)",
+            "Souplesse : rachats partiels possibles",
             "",
             "**Inconvénient** : frais de gestion UC (0.5 à 1%/an) réduisent le rendement",
         ]
@@ -5568,11 +6005,11 @@ def tool_simuler_scpi(args: Dict) -> str:
         f"| Nue-propriété | Zéro fiscalité immédiate, décote achat | TMI ≥ 41%, pas besoin revenus |",
         "",
         "### Rappel : Plus-values SCPI",
-        "- Régime des plus-values immobilières (19% IR + 17,2% PS)",
+        f"- Régime des plus-values immobilières ({pct_fr(IR_PV_IMMOBILIERE, 0)} IR + {pct_fr(PS_IMMOBILIER)} PS)",
         "- Exonération IR totale après **22 ans** de détention",
         "- Exonération PS totale après **30 ans**",
         "",
-        "> ⚠️ Rendement non garanti. Investissement à risque de perte en capital.",
+        "> Rendement non garanti. Investissement à risque de perte en capital.",
         "> Ce calcul est indicatif — vérifiez le prospectus de la SCPI.",
     ]
     return "\n".join(lines)
@@ -5635,7 +6072,7 @@ def tool_guide_fiscalite_internationale(args: Dict) -> str:
         "| **Exemption avec progressivité** | Revenu étranger exonéré d'IR français MAIS inclus pour calculer le taux sur vos autres revenus français | Allemagne (salaires), Suisse (frontaliers hors Genève) |",
         "| **Crédit d'impôt** | Revenu étranger inclus dans la base IR → IR calculé sur le total → crédit = impôt français correspondant | Irlande, Luxembourg, Belgique, UK, USA... |",
         "",
-        "> Dans les deux cas, les **prélèvements sociaux (17,2%)** peuvent s'appliquer en France sur les revenus du patrimoine étranger, sauf si vous cotisez à un régime de sécurité sociale étranger de l'UE/EEE.",
+        f"> Dans les deux cas, les **prélèvements sociaux ({pct_fr(PS_IMMOBILIER)} sur les revenus fonciers, {pct_fr(PS_CAPITAL)} sur les revenus mobiliers)** peuvent s'appliquer en France sur les revenus du patrimoine étranger, sauf si vous cotisez à un régime de sécurité sociale étranger de l'UE/EEE.",
         "",
     ]
 
@@ -5655,7 +6092,7 @@ def tool_guide_fiscalite_internationale(args: Dict) -> str:
             "",
         ]
         if conv.get("note"):
-            lines.append(f"ℹ️ {conv['note']}")
+            lines.append(f"{conv['note']}")
         if conv.get("note_frontaliers"):
             lines.append(f"**Frontaliers** : {conv['note_frontaliers']}")
         if conv.get("particularites"):
@@ -5687,7 +6124,7 @@ def tool_guide_fiscalite_internationale(args: Dict) -> str:
     elif pays_key and pays_key not in CONVENTIONS_FISCALES:
         lines += [
             "---",
-            f"⚠️ Pays '{pays_key}' non référencé dans la base de données.",
+            f"Pays '{pays_key}' non référencé dans la base de données.",
             "Vérifiez l'existence d'une convention fiscale sur **impots.gouv.fr → Conventions fiscales**.",
             "Sans convention : risque de double imposition. Un crédit d'impôt partiel peut s'appliquer (art. 57 CGI).",
         ]
@@ -5725,7 +6162,7 @@ def tool_guide_fiscalite_internationale(args: Dict) -> str:
         "- Liste des conventions : **impots.gouv.fr → International → Conventions fiscales**",
         "- Service non-résidents : **sipnr.dgfip.finances.gouv.fr**",
         "",
-        "> ⚠️ La fiscalité internationale est complexe. Pour votre situation exacte, consultez un conseiller fiscal spécialisé.",
+        "> La fiscalité internationale est complexe. Pour votre situation exacte, consultez un conseiller fiscal spécialisé.",
     ]
     return "\n".join(lines)
 
@@ -5786,13 +6223,13 @@ def tool_calculer_revenu_etranger(args: Dict) -> str:
             "",
             f"### **IR à payer en France : {ir_effectif:,.0f}€**",
             "",
-            f"ℹ️ Le revenu étranger ({revenu_etr:,.0f}€) est **exonéré d'IR français** mais augmente le taux appliqué à vos revenus français.",
-            f"ℹ️ TMI effectif : {ir_total['taux_marginal']:.0f}%",
+            f"Le revenu étranger ({revenu_etr:,.0f}€) est **exonéré d'IR français** mais augmente le taux appliqué à vos revenus français.",
+            f"TMI effectif : {ir_total['taux_marginal']:.0f}%",
         ]
         if impot_etranger > 0:
             lines.append(f"\nImpôt payé à l'étranger : {impot_etranger:,.0f}€ (non déduit dans ce régime — normal)")
 
-    else:  # credit_impot
+    else: # credit_impot
         # Crédit d'impôt = part de l'IR français proportionnelle au revenu étranger
         if revenu_total > 0:
             credit = ir_total["impot_net"] * (revenu_etr / revenu_total)
@@ -5818,7 +6255,7 @@ def tool_calculer_revenu_etranger(args: Dict) -> str:
                 f"**Coût fiscal total** (étranger + France) : {impot_etranger + ir_net_france:,.0f}€",
             ]
             if impot_etranger > credit:
-                lines.append(f"⚠️ Impôt étranger ({impot_etranger:,.0f}€) > crédit accordé ({credit:,.0f}€) : double imposition résiduelle de {impot_etranger - credit:,.0f}€")
+                lines.append(f"Impôt étranger ({impot_etranger:,.0f}€) > crédit accordé ({credit:,.0f}€) : double imposition résiduelle de {impot_etranger - credit:,.0f}€")
 
     lines += [
         "",
@@ -5834,7 +6271,7 @@ def tool_calculer_revenu_etranger(args: Dict) -> str:
         "- **Formulaire 2042** : reporter les montants (cases spécifiques selon le type de revenu)",
         "- **Formulaire 3916** : déclarer les comptes bancaires à l'étranger (même si inactifs)",
         "",
-        "> ⚠️ Simulation indicative. La règle exacte dépend de la nature précise du revenu et de l'article de la convention applicable.",
+        "> Simulation indicative. La règle exacte dépend de la nature précise du revenu et de l'article de la convention applicable.",
         "> Consultez un conseiller fiscal spécialisé en fiscalité internationale.",
     ]
     return "\n".join(lines)
@@ -5878,7 +6315,7 @@ def tool_guide_frontaliers(args: Dict) -> str:
         is_geneve = "genev" in canton or canton == "ge"
         if is_geneve:
             lines += [
-                "⚠️ **Canton de Genève : régime particulier**",
+                "**Canton de Genève : régime particulier**",
                 "- Imposition **partagée** : impôt à la source suisse retenu par l'employeur genevois",
                 "- France perçoit une **compensation annuelle** de Genève",
                 "- Vous êtes également imposable en France (crédit d'impôt accordé)",
@@ -5891,7 +6328,7 @@ def tool_guide_frontaliers(args: Dict) -> str:
             ]
         else:
             lines += [
-                "✅ **Autres cantons (hors Genève) : imposition en France uniquement**",
+                "**Autres cantons (hors Genève) : imposition en France uniquement**",
                 "- Votre employeur suisse retient un **impôt à la source (IS)** de ~8-10%",
                 "- Cet IS est **remboursé/crédité** car vous êtes imposable uniquement en France",
                 "- **Aucun impôt sur le revenu suisse** à payer en Suisse (hors IS remboursable)",
@@ -5997,15 +6434,15 @@ def tool_guide_frontaliers(args: Dict) -> str:
         if teletravail > 0:
             jours_annuel = round(teletravail * 46)
             if teletravail > 0.7:
-                lines.append(f"⚠️ Vous dépassez probablement la tolérance de 34j/an avec {jours_annuel} jours estimés")
+                lines.append(f"Vous dépassez probablement la tolérance de 34j/an avec {jours_annuel} jours estimés")
             else:
-                lines.append(f"ℹ️ Télétravail {jours_annuel} j/an estimé — dans la tolérance 34j")
+                lines.append(f"Télétravail {jours_annuel} j/an estimé — dans la tolérance 34j")
 
     elif pays == "belgique":
         lines += [
             "### Régime fiscal Belgique — Frontaliers",
             "",
-            "⚠️ **Régime complexe selon le secteur d'activité**",
+            "**Régime complexe selon le secteur d'activité**",
             "",
             "#### Secteur privé",
             "- Salaire généralement imposé **en Belgique** (retenue précompte professionnel)",
@@ -6100,10 +6537,10 @@ def tool_guide_maprimerenov(args: Dict) -> str:
         "",
         "| Catégorie | Plafond RFR | Votre situation |",
         "|-----------|-------------|-----------------|",
-        f"| 🔵 Très modestes | ≤ {seuils[0]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'bleu' else ''} |",
-        f"| 🟡 Modestes | ≤ {seuils[1]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'jaune' else ''} |",
-        f"| 🟣 Intermédiaires | ≤ {seuils[2]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'violet' else ''} |",
-        f"| 🌸 Supérieurs | > {seuils[2]:,}€ | {'✅ VOTRE CATÉGORIE' if categorie == 'rose' else ''} |",
+        f"| Bleu (très modestes) | ≤ {seuils[0]:,}€ | {'**VOTRE CATÉGORIE**' if categorie == 'bleu' else ''} |",
+        f"| Jaune (modestes) | ≤ {seuils[1]:,}€ | {'**VOTRE CATÉGORIE**' if categorie == 'jaune' else ''} |",
+        f"| Violet (intermédiaires) | ≤ {seuils[2]:,}€ | {'**VOTRE CATÉGORIE**' if categorie == 'violet' else ''} |",
+        f"| Rose (supérieurs) | > {seuils[2]:,}€ | {'**VOTRE CATÉGORIE**' if categorie == 'rose' else ''} |",
         "",
         "Les plafonds de l'Anah dépendent du **nombre de personnes composant le ménage**, pas du nombre",
         "de parts fiscales, et diffèrent entre l'Île-de-France et le reste du territoire.",
@@ -6229,7 +6666,7 @@ def tool_guide_maprimerenov(args: Dict) -> str:
         "- Annuaire RGE et barèmes : **france-renov.gouv.fr**",
         "- Accompagnateur Rénov' : **france-renov.gouv.fr/mon-accompagnateur-renov**",
         "",
-        "> ⚠️ Montants indicatifs au 1er janvier 2026. Les aides réelles dépendent des devis obtenus",
+        "> Montants indicatifs au 1er janvier 2026. Les aides réelles dépendent des devis obtenus",
         "> et du plafond de dépense éligible. Simulez sur maprimerenov.gouv.fr avant d'engager les travaux.",
     ]
     return "\n".join(lines)
@@ -6327,7 +6764,9 @@ def tool_guide_evenements_vie(args: Dict) -> str:
             "### Pension alimentaire versée",
             "- Déductible du revenu imposable du payeur (art. 156 II CGI).",
             "- Imposable chez le bénéficiaire comme pension alimentaire reçue.",
-            "- Plafond si enfant majeur non rattaché : **6 368 €** par enfant (2025).",
+            f"- Plafond si enfant majeur non rattaché : **{PLAFOND_PENSION_ENFANT_MAJEUR:,}€** par enfant "
+            f"(le double, soit {PLAFOND_PENSION_ENFANT_MARIE:,}€, si l'enfant est marié ou pacsé et que "
+            "les beaux-parents ne participent pas à son entretien).",
             "",
             "### Démarches",
             "- Mettre à jour la situation sur impots.gouv.fr dès la séparation.",
@@ -6460,7 +6899,7 @@ def tool_guide_evenements_vie(args: Dict) -> str:
             "",
         ]
         # Plafond pension alimentaire enfant majeur non rattaché
-        plafond_pension = 6_368  # 2025
+        plafond_pension = PLAFOND_PENSION_ENFANT_MAJEUR
         lines += [
             "| Critère | Rattachement | Pension alimentaire |",
             "|---------|-------------|---------------------|",
@@ -6578,13 +7017,12 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
     nb_parts = calculer_parts(situation, nb_enfants)
 
     # Constantes fiscales 2025/2026
-    ABATTEMENT_RETRAITE_MIN = 422      # Abattement 10% retraite — plancher par pensionné
-    ABATTEMENT_RETRAITE_MAX = 4_321    # Abattement 10% retraite — plafond par pensionné
-    ABATT_PERSONNES_AGEES_1 = 2_312    # RFR < 17 510 €
-    ABATT_PERSONNES_AGEES_2 = 1_156    # RFR < 28 058 €
-    SEUIL_RFR_PA_1 = 17_510
-    SEUIL_RFR_PA_2 = 28_058
-    PLAFOND_PENSION_ENFANT_MAJEUR = 6_368
+    ABATTEMENT_RETRAITE_MIN = ABATTEMENT_PENSION_MIN
+    ABATTEMENT_RETRAITE_MAX = ABATTEMENT_PENSION_MAX
+    ABATT_PERSONNES_AGEES_1 = ABATT_PERSONNES_AGEES_PLEIN
+    ABATT_PERSONNES_AGEES_2 = ABATT_PERSONNES_AGEES_REDUIT
+    SEUIL_RFR_PA_1 = SEUIL_ABATT_PERSONNES_AGEES_1
+    SEUIL_RFR_PA_2 = SEUIL_ABATT_PERSONNES_AGEES_2
 
     lines = [f"## Fiscalité des revenus de remplacement — {type_revenu.replace('_', ' ').title()}", ""]
 
@@ -6611,6 +7049,25 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
             "",
             "**À déclarer** : case 1AP/1BP de la déclaration 2042 (traitements, salaires, ARE).",
             "Le prélèvement à la source s'applique sur les ARE (taux neutre ou personnalisé).",
+            "",
+            "### Durée d'indemnisation après rupture conventionnelle",
+            "",
+            f"Pour les fins de contrat intervenant à compter du {ARE_RUPTURE_CONVENTIONNELLE['date_effet']}, "
+            "la durée maximale d'indemnisation après une rupture conventionnelle individuelle est réduite :",
+            "",
+            "| Âge à la fin de contrat | Durée maximale | Auparavant |",
+            "|-------------------------|----------------|------------|",
+            f"| Moins de 55 ans | {ARE_RUPTURE_CONVENTIONNELLE['duree_moins_55_mois']:.0f} mois | "
+            f"{ARE_RUPTURE_CONVENTIONNELLE['duree_anterieure_moins_55_mois']:.0f} mois |",
+            f"| 55 ans et plus | {ARE_RUPTURE_CONVENTIONNELLE['duree_55_et_plus_mois']:.1f} mois | "
+            f"{ARE_RUPTURE_CONVENTIONNELLE['duree_anterieure_55_et_plus_mois']:.1f} mois |",
+            "",
+            "Les 55 ans et plus peuvent demander une prolongation à France Travail, accordée après "
+            "examen des démarches de recherche d'emploi ou du projet professionnel. Les autres modes "
+            "de rupture (licenciement, fin de CDD) conservent leurs durées habituelles.",
+            "",
+            "> Source : avenant n° 2 à la convention d'assurance chômage du 15 novembre 2024, "
+            "agréé par arrêté du 19 juin 2026.",
         ]
 
     # ── RETRAITE / PENSION D'INVALIDITÉ ──────────────────────────────────────
@@ -6698,8 +7155,11 @@ def tool_calculer_revenus_remplacement(args: Dict) -> str:
             f"| Fraction exonérée ({(1-fraction)*100:.0f}%) | {montant - revenu_imposable:,.0f}€ |",
             "",
             "**À déclarer** : case 1AW/1BW (rentes viagères à titre onéreux).",
-            "L'abattement de 10% retraites **ne s'applique pas** aux RVTO — la fraction imposable est directement la base.",
-            "**Prélèvements sociaux** : 17,2% sur la fraction imposable si la rente provient de versements déduits (PER).",
+            "L'abattement de 10% retraites **ne s'applique pas** aux RVTO : la fraction imposable est directement la base.",
+            f"**Prélèvements sociaux** : {pct_fr(PS_CAPITAL)} sur la fraction imposable (taux des revenus du capital, "
+            f"porté de {pct_fr(CSG_CAPITAL_TAUX_MAINTENU + CRDS + PRELEVEMENT_SOLIDARITE)} à {pct_fr(PS_CAPITAL)} par la LFSS 2026).",
+            f"Une rente issue de versements **déduits** (PER) suit au contraire le régime des pensions : "
+            f"barème IR après abattement de 10% et PS de {pct_fr(PS_PENSION)}.",
         ]
 
     # ── INDEMNITÉ DE LICENCIEMENT ─────────────────────────────────────────────
@@ -6829,14 +7289,14 @@ def tool_simuler_sortie_per(args: Dict) -> str:
     tmi = tmi_pct / 100.0
 
     # Prélèvements sociaux
-    TAUX_PS = 0.172
-    PFU = 0.30  # Prélèvement Forfaitaire Unique (12,8% IR + 17,2% PS)
-    TAUX_PFU_IR = 0.128
-    TAUX_PFU_PS = 0.172
+    TAUX_PS_GAINS = PS_CAPITAL
+    PFU = PFU_CAPITAL  # 12,8% IR + prélèvements sociaux sur le capital
+    TAUX_PS_RENTE = PS_PENSION  # rente issue de versements déduits = pension (RVTG)
+    TAUX_PS_RVTO = PS_CAPITAL   # rente issue de versements non déduits (RVTO)
 
     # Abattement 10% retraite pour la rente
-    ABATT_RENTE_MIN = 422
-    ABATT_RENTE_MAX = 4_321
+    ABATT_RENTE_MIN = ABATTEMENT_PENSION_MIN
+    ABATT_RENTE_MAX = ABATTEMENT_PENSION_MAX
 
     lines = [
         "## Simulation sortie PER — Plan Épargne Retraite",
@@ -6861,10 +7321,10 @@ def tool_simuler_sortie_per(args: Dict) -> str:
         rente_imposable = max(0, rente - abatt_rente)
         ir_rente = rente_imposable * tmi
         # PS sur la fraction imposable des versements déduits
-        # La rente issue de versements déduits : PS 17,2% sur la part issue des gains uniquement
+        # Rente issue de versements déduits : rente viagère à titre gratuit, assimilée
         # Note : techniquement, la rente PER déduit est soumise au barème IR en totalité
-        # Les PS (CSG 6,8% déductible + CRDS + solidarité) s'appliquent à 17,2%
-        ps_rente = rente * TAUX_PS  # PS sur rente totale (régime général)
+        # PS de 9,1% (CSG 8,3% + CRDS 0,5% + Casa 0,3%), et non 18,6%
+        ps_rente = rente * TAUX_PS_RENTE  # régime des pensions de retraite
         rente_nette = rente - ir_rente - ps_rente
 
         lines += [
@@ -6878,7 +7338,7 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             f"| Rente annuelle brute | {rente:,.0f}€ |",
             f"| Abattement 10% retraites (min {ABATT_RENTE_MIN:,}€ / max {ABATT_RENTE_MAX:,}€) | -{abatt_rente:,.0f}€ |",
             f"| Rente imposable (barème IR, TMI {tmi_pct:.0f}%) | {rente_imposable:,.0f}€ → **{ir_rente:,.0f}€ d'IR** |",
-            f"| Prélèvements sociaux 17,2% | -{ps_rente:,.0f}€ |",
+            f"| Prélèvements sociaux {pct_fr(TAUX_PS_RENTE)} (régime des pensions) | -{ps_rente:,.0f}€ |",
             f"| **Rente nette annuelle** | **{rente_nette:,.0f}€** |",
             "",
             "> Les prélèvements sociaux incluent la CSG (dont 6,8% déductible l'année suivante), CRDS et prélèvement de solidarité.",
@@ -6908,11 +7368,11 @@ def tool_simuler_sortie_per(args: Dict) -> str:
         versements_deduits_sortie = versements_deduits  # fraction des versements déduits
         versements_non_deduits_sortie = versements_non_deduits
 
-        # Partie déduites : capital = imposable barème IR ; gains = PFU 30%
+        # Partie déduites : capital = imposable barème IR ; gains = PFU
         ir_cap_deduit = versements_deduits_sortie * tmi
         pfu_gains_deduits = gains_deduits * PFU
 
-        # Partie non déduite : capital = exonéré ; gains = PFU 30%
+        # Partie non déduite : capital = exonéré ; gains = PFU
         pfu_gains_non_deduits = gains_non_deduits * PFU
 
         total_fiscalite = ir_cap_deduit + pfu_gains_deduits + pfu_gains_non_deduits
@@ -6925,14 +7385,14 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             f"| Fraction du capital (versements déduits) | {versements_deduits_sortie:,.0f}€ |",
             f"| Imposition au barème IR (TMI {tmi_pct:.0f}%) | **{ir_cap_deduit:,.0f}€** |",
             f"| Plus-values rattachées (gains sur versements déduits) | {gains_deduits:,.0f}€ |",
-            f"| PFU 30% sur ces gains | **{pfu_gains_deduits:,.0f}€** |",
+            f"| PFU {pct_fr(PFU)} sur ces gains | **{pfu_gains_deduits:,.0f}€** |",
             "",
             "#### Versements NON DÉDUITS (capital exonéré, gains au PFU)",
             f"| Élément | Montant |",
             f"|---------|---------|",
             f"| Fraction du capital (versements non déduits) | {versements_non_deduits_sortie:,.0f}€ | **EXONÉRÉ** |",
             f"| Plus-values rattachées (gains sur versements non déduits) | {gains_non_deduits:,.0f}€ |",
-            f"| PFU 30% sur ces gains | **{pfu_gains_non_deduits:,.0f}€** |",
+            f"| PFU {pct_fr(PFU)} sur ces gains | **{pfu_gains_non_deduits:,.0f}€** |",
             "",
             "#### Bilan global",
             f"| | Montant |",
@@ -6953,7 +7413,7 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             "**Règle applicable** (art. L224-4 Code monétaire) :",
             "- La fraction correspondant aux **versements déduits** : imposable au barème IR (TMI).",
             "- La fraction correspondant aux **versements non déduits** : exonérée d'IR.",
-            "- Les **plus-values** (gains) : soumises au **PFU 30%** dans tous les cas.",
+            f"- Les **plus-values** (gains) : soumises au **PFU {pct_fr(PFU)}** dans tous les cas.",
             "",
         ]
         ir_versements_deduits = versements_deduits * tmi
@@ -6966,7 +7426,7 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             f"|---------|---------|-----------|",
             f"| Versements déduits | {versements_deduits:,.0f}€ | IR au barème ({tmi_pct:.0f}%) → **{ir_versements_deduits:,.0f}€** |",
             f"| Versements non déduits | {versements_non_deduits:,.0f}€ | **Exonéré** |",
-            f"| Plus-values / gains | {gains:,.0f}€ | PFU 30% → **{pfu_gains:,.0f}€** |",
+            f"| Plus-values / gains | {gains:,.0f}€ | PFU {pct_fr(PFU)} → **{pfu_gains:,.0f}€** |",
             "",
             f"| | |",
             f"|--|--|",
@@ -6994,11 +7454,11 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             "",
             "**Régime fiscal** :",
             "- Fraction correspondant aux versements (déduits ou non) : **exonérée d'IR**.",
-            "- **Plus-values / gains** : soumises aux prélèvements sociaux 17,2%.",
+            f"- **Plus-values / gains** : soumises aux prélèvements sociaux {pct_fr(TAUX_PS_GAINS)}.",
             "- Les gains restent soumis aux **PS uniquement** (pas d'IR, pas de PFU).",
             "",
         ]
-        ps_gains = gains * TAUX_PS
+        ps_gains = gains * TAUX_PS_GAINS
         total_fiscalite = ps_gains
         capital_net = capital_total - total_fiscalite
 
@@ -7007,7 +7467,7 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             f"|---------|---------|-----------|",
             f"| Versements déduits | {versements_deduits:,.0f}€ | **EXONÉRÉ d'IR** |",
             f"| Versements non déduits | {versements_non_deduits:,.0f}€ | **EXONÉRÉ d'IR** |",
-            f"| Plus-values / gains | {gains:,.0f}€ | PS 17,2% → **{ps_gains:,.0f}€** |",
+            f"| Plus-values / gains | {gains:,.0f}€ | PS {pct_fr(TAUX_PS_GAINS)} → **{ps_gains:,.0f}€** |",
             "",
             f"| | |",
             f"|--|--|",
@@ -7030,10 +7490,10 @@ def tool_simuler_sortie_per(args: Dict) -> str:
             "",
             "| Mode de sortie | Versements déduits | Versements non déduits | Gains |",
             "|----------------|-------------------|----------------------|-------|",
-            f"| **Retraite — Capital** | Barème IR (TMI {tmi_pct:.0f}%) | Exonéré | PFU 30% |",
-            f"| **Retraite — Rente** | Barème IR après abatt. 10% | Fraction RVTO imposable | PS 17,2% inclus |",
-            f"| **Anticipation RP** | Barème IR (TMI {tmi_pct:.0f}%) | Exonéré | PFU 30% |",
-            f"| **Anticipation exceptionnelle** | Exonéré | Exonéré | PS 17,2% uniquement |",
+            f"| **Retraite — Capital** | Barème IR (TMI {tmi_pct:.0f}%) | Exonéré | PFU {pct_fr(PFU)} |",
+            f"| **Retraite — Rente** | Barème IR après abatt. 10% | Fraction RVTO imposable | PS {pct_fr(TAUX_PS_RENTE)} (RVTG) ou {pct_fr(TAUX_PS_RVTO)} (RVTO) |",
+            f"| **Anticipation RP** | Barème IR (TMI {tmi_pct:.0f}%) | Exonéré | PFU {pct_fr(PFU)} |",
+            f"| **Anticipation exceptionnelle** | Exonéré | Exonéré | PS {pct_fr(TAUX_PS_GAINS)} uniquement |",
         ]
 
     lines += [
@@ -7041,7 +7501,7 @@ def tool_simuler_sortie_per(args: Dict) -> str:
         "### Points clés à retenir",
         "- Les versements **déduits** à l'entrée sont **imposables à la sortie** (principe de symétrie fiscale).",
         "- Les versements **non déduits** sont exonérés à la sortie (pas de double imposition).",
-        f"- Les **plus-values** sont toujours soumises au PFU 30% (sauf déblocage exceptionnel : PS 17,2% seulement).",
+        f"- Les **plus-values** sont toujours soumises au PFU {pct_fr(PFU)} (sauf déblocage exceptionnel : PS {pct_fr(TAUX_PS_GAINS)} seulement).",
         "- À la retraite, le TMI est souvent plus faible → c'est tout l'intérêt de la déduction à l'entrée.",
         f"- Avec un TMI de {tmi_pct:.0f}% aujourd'hui, chaque euro déduit du PER économise {tmi_pct:.0f} centimes d'impôt.",
         "",
@@ -7084,7 +7544,7 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
             f"  → Impôt à TMI {tmi}% : ~{montant * tmi/100:,.0f}€",
             "",
             "### Recommandation",
-            "- ✅ Toujours placer sur PEE ou PERCOL pour l'exonération d'IR",
+            "- Toujours placer sur PEE ou PERCOL pour l'exonération d'IR",
             f"- Abondement employeur possible : jusqu'à 300% de votre versement, plafonné à {ABOND_MAX_PEE:,.0f}€/an",
         ]
         if abondement > 0:
@@ -7115,7 +7575,7 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
     elif dispositif == "pee":
         duree_restante = annees_blocage if annees_blocage > 0 else 5
         gains = montant * 0.05 * duree_restante
-        ps = gains * 0.172
+        ps = gains * PS_CAPITAL
         if annees_blocage > 0:
             lines.append(f"**Blocage restant déclaré** : {annees_blocage} an(s)")
             lines.append("")
@@ -7129,10 +7589,10 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
             "- L'abondement est exonéré d'IR et de charges patronales (hors forfait social)",
             "",
             "### Fiscalité à la sortie",
-            "- **Gains/intérêts** : exonérés d'IR (mais prélèvements sociaux 17.2%)",
+            f"- **Gains/intérêts** : exonérés d'IR (mais prélèvements sociaux {pct_fr(PS_CAPITAL)})",
             f"- Estimation sur {montant:,.0f}€ à 5%/an pendant {duree_restante} an(s) :",
             f"  - Gains estimés : ~{gains:,.0f}€",
-            f"  - PS (17.2%) : ~{ps:,.0f}€",
+            f"  - PS ({pct_fr(PS_CAPITAL)}) : ~{ps:,.0f}€",
             f"  - **Net perçu : ~{montant + gains - ps:,.0f}€**",
             "",
             "### Cas de déblocage anticipé",
@@ -7151,7 +7611,7 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
             "",
             "### Fiscalité",
             "- Versements exonérés d'IR + abondement exonéré de charges patronales",
-            "- **Sortie en capital** : versements imposables (si déduits) + PS 17.2% sur gains",
+            f"- **Sortie en capital** : versements imposables (si déduits) + PS {pct_fr(PS_CAPITAL)} sur gains",
             "- **Sortie en rente** : abattement 10% puis barème IR",
             "",
             f"### Économie d'IR estimée",
@@ -7187,16 +7647,16 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
                 f"- IR à TMI {tmi}% : ~{ir_non_conforme:,.0f}€",
                 "",
                 "### Gain de cession (plus-value)",
-                "- PFU 30% sur la différence prix de vente - valeur à l'acquisition",
+                f"- PFU {pct_fr(PFU_CAPITAL)} sur la différence prix de vente - valeur à l'acquisition",
             ]
 
     elif dispositif == "bspce":
-        # BSPCE: PFU 12.8% IR + 17.2% PS = 30% si plan normal
-        # Si < 3 ans dans la société: IR 30% + PS 17.2% = 47.2%
-        taux_ir_bspce = 30.0 if moins_3ans else 12.8
-        taux_total = taux_ir_bspce + 17.2
+        # BSPCE : PFU (12,8% IR + PS sur le capital) si plan normal
+        # Si < 3 ans dans la société : IR 30% + PS sur le capital
+        taux_ir_bspce = (BSPCE_IR_MAJORE if moins_3ans else PFU_IR) * 100
+        taux_total = taux_ir_bspce + PS_CAPITAL * 100
         ir = montant * taux_ir_bspce / 100
-        ps = montant * 17.2 / 100
+        ps = montant * PS_CAPITAL
         net = montant - ir - ps
         lines += [
             "## BSPCE (Bons de Souscription de Parts de Créateur d'Entreprise)",
@@ -7211,37 +7671,37 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
         ]
         if moins_3ans:
             lines += [
-                "⚠️ **Taux majoré** : ancienneté < 3 ans dans la société",
+                "**Taux majoré** : ancienneté < 3 ans dans la société",
                 f"- IR : **30%** = {ir:,.0f}€",
-                f"- Prélèvements sociaux : 17.2% = {ps:,.0f}€",
-                f"- **Taux global : {taux_total}%** → Net : {net:,.0f}€",
+                f"- Prélèvements sociaux : {pct_fr(PS_CAPITAL)} = {ps:,.0f}€",
+                f"- **Taux global : {pct_fr(taux_total / 100)}** → Net : {net:,.0f}€",
             ]
         else:
             lines += [
-                "✅ **Taux standard** : ancienneté ≥ 3 ans",
-                f"- IR (PFU) : 12.8% = {ir:,.0f}€",
-                f"- Prélèvements sociaux : 17.2% = {ps:,.0f}€",
-                f"- **Taux global : {taux_total}%** → Net : {net:,.0f}€",
+                "**Taux standard** : ancienneté ≥ 3 ans",
+                f"- IR (PFU) : {pct_fr(PFU_IR)} = {ir:,.0f}€",
+                f"- Prélèvements sociaux : {pct_fr(PS_CAPITAL)} = {ps:,.0f}€",
+                f"- **Taux global : {pct_fr(taux_total / 100)}** → Net : {net:,.0f}€",
             ]
         lines += [
             "",
             "### Comparaison avec un salaire équivalent",
             f"- Salaire imposé à TMI {tmi}% + charges : taux effectif ~{tmi + 22:.0f}%",
-            f"- BSPCE : {taux_total}% → **avantage fiscal ~{max(0, tmi + 22 - taux_total):.0f}pts**",
+            f"- BSPCE : {pct_fr(taux_total / 100)} → **avantage fiscal ~{max(0, tmi + 22 - taux_total):.0f} points**",
         ]
 
-    else:  # synthese
+    else: # synthese
         lines += [
             "## Synthèse de l'épargne salariale",
             "",
             "| Dispositif | Exonération IR | Blocage | Abondement max employeur | Atout principal |",
             "|-----------|--------------|---------|--------------------------|-----------------|",
-            f"| **Intéressement** | ✅ Si PEE | 5 ans | {ABOND_MAX_PEE:,.0f}€/an | Flexible, exo immédiate |",
-            f"| **Participation** | ✅ Si PEE | 5 ans | {ABOND_MAX_PEE:,.0f}€/an | Obligatoire >50 sal. |",
-            f"| **PEE** | ✅ Gains exonérés | 5 ans | {ABOND_MAX_PEE:,.0f}€/an | Court/moyen terme |",
-            f"| **PERCOL** | ✅ Versements déductibles | Retraite | {ABOND_MAX_PERCO:,.0f}€/an | Retraite + déduction |",
+            f"| **Intéressement** | Oui, si PEE | 5 ans | {ABOND_MAX_PEE:,.0f}€/an | Flexible, exo immédiate |",
+            f"| **Participation** | Oui, si PEE | 5 ans | {ABOND_MAX_PEE:,.0f}€/an | Obligatoire >50 sal. |",
+            f"| **PEE** | Gains exonérés | 5 ans | {ABOND_MAX_PEE:,.0f}€/an | Court/moyen terme |",
+            f"| **PERCOL** | Versements déductibles | Retraite | {ABOND_MAX_PERCO:,.0f}€/an | Retraite + déduction |",
             "| **AGA** | Partiel (abatt. 50%) | 2 ans | — | Fidélisation dirigeants |",
-            "| **BSPCE** | PFU 30% (ou 47.2%) | — | — | Startups, création valeur |",
+            f"| **BSPCE** | PFU {pct_fr(PFU_CAPITAL)} (ou {pct_fr(BSPCE_IR_MAJORE + PS_CAPITAL)}) | - | - | Startups, création valeur |",
             "",
             "### Stratégie recommandée",
             "1. **Maximisez l'abondement** : placez au moins autant que l'abondement max employeur",
@@ -7250,7 +7710,7 @@ def tool_optimiser_epargne_salariale(args: Dict) -> str:
             "3. **Arbitrage PEE vs PERCOL** : si vous approchez la retraite, PERCOL + déduction IR",
             "4. **BSPCE** : lever le plus tôt possible pour maximiser la plus-value future",
             "",
-            "### Plafonds 2025 (PASS = 46 368€)",
+            f"### Plafonds {ANNEE_DECLARATION} (PASS = {PASS_ANNEE_COURANTE:,}€)",
             f"- Abondement PEE : 8% PASS = **{ABOND_MAX_PEE:,.0f}€/an**",
             f"- Abondement PERCOL : 16% PASS = **{ABOND_MAX_PERCO:,.0f}€/an**",
             "- Intéressement : plafonné à 75% du PASS par bénéficiaire",
@@ -7338,7 +7798,7 @@ def tool_calculer_impot_societes(args: Dict) -> str:
     # Éligibilité
     if eligible_taux_reduit:
         lines += [
-            "## ✅ Éligible au taux réduit PME",
+            "## Éligible au taux réduit PME",
             "Conditions remplies :",
             f"- CA {'non renseigné (supposé < 10M€)' if ca == 0 else f'{ca:,.0f}€ < 10 000 000€'}",
             f"- Capital détenu par personnes physiques : {capital_pp_pct:.0f}% ≥ 75%",
@@ -7346,7 +7806,7 @@ def tool_calculer_impot_societes(args: Dict) -> str:
         ]
     else:
         lines += [
-            "## ⚠️ Non éligible au taux réduit PME",
+            "## Non éligible au taux réduit PME",
         ]
         if ca >= 10_000_000:
             lines.append(f"- CA {ca:,.0f}€ ≥ 10 000 000€")
@@ -7403,9 +7863,9 @@ def tool_calculer_impot_societes(args: Dict) -> str:
         "",
         "## Distribution des dividendes",
         f"Sur le résultat net {resultat_net:,.0f}€ :",
-        "- **PFU 30%** sur dividendes (12.8% IR + 17.2% PS)",
+        f"- **PFU {pct_fr(PFU_CAPITAL)}** sur dividendes ({pct_fr(PFU_IR)} IR + {pct_fr(PS_CAPITAL)} PS)",
         "- Ou option barème + abattement 40% (si plus favorable)",
-        f"- Ex. : dividende de {resultat_net:,.0f}€ → PFU {resultat_net * 0.30:,.0f}€ → net {resultat_net * 0.70:,.0f}€",
+        f"- Ex. : dividende de {resultat_net:,.0f}€ → PFU {resultat_net * PFU_CAPITAL:,.0f}€ → net {resultat_net * (1 - PFU_CAPITAL):,.0f}€",
         "",
         "---",
         "*Source : CGI art. 219, 235 ter ZC — Taux IS fixé par LFR 2022*",
@@ -7477,7 +7937,7 @@ def tool_optimiser_remuneration_dirigeant(args: Dict) -> str:
     resultat_net_b = benefice_apres_remun_b - is_b
     # L'actionnaire décide de distribuer tout le résultat net en dividendes
     dividendes_bruts_b = resultat_net_b
-    pfu_b = dividendes_bruts_b * 0.30  # PFU 30%
+    pfu_b = dividendes_bruts_b * PFU_CAPITAL
     net_dividendes_b = dividendes_bruts_b - pfu_b
     rni_b = net_remun_b * 0.90
     ir_b = calc_ir(rni_b)
@@ -7487,7 +7947,7 @@ def tool_optimiser_remuneration_dirigeant(args: Dict) -> str:
     is_c = calc_is(benefice_brut)
     resultat_net_c = benefice_brut - is_c
     dividendes_bruts_c = resultat_net_c
-    pfu_c = dividendes_bruts_c * 0.30
+    pfu_c = dividendes_bruts_c * PFU_CAPITAL
     net_dividendes_c = dividendes_bruts_c - pfu_c
     net_total_c = net_dividendes_c
 
@@ -7502,7 +7962,7 @@ def tool_optimiser_remuneration_dirigeant(args: Dict) -> str:
         f"| IS payé | {is_a:,.0f}€ | {is_b:,.0f}€ | {is_c:,.0f}€ |",
         f"| Net salarié (après charges) | {net_remun_a:,.0f}€ | {net_remun_b:,.0f}€ | — |",
         f"| IR sur rémunération | {ir_a:,.0f}€ | {ir_b:,.0f}€ | — |",
-        f"| Dividendes nets (PFU 30%) | — | {net_dividendes_b:,.0f}€ | {net_dividendes_c:,.0f}€ |",
+        f"| Dividendes nets (PFU {pct_fr(PFU_CAPITAL)}) | - | {net_dividendes_b:,.0f}€ | {net_dividendes_c:,.0f}€ |",
         f"| **Net total perçu** | **{net_remun_a - ir_a:,.0f}€** | **{net_remun_b - ir_b + net_dividendes_b:,.0f}€** | **{net_dividendes_c:,.0f}€** |",
         "",
         "*(Scénarios A et B : résultat non distribué mis en réserve)*",
@@ -7517,14 +7977,14 @@ def tool_optimiser_remuneration_dirigeant(args: Dict) -> str:
         key=lambda x: x[1]
     )
     lines += [
-        f"## ✅ Recommandation : Scénario **{best[0]}** — net immédiat le plus élevé ({best[1]:,.0f}€)",
+        f"## Recommandation : Scénario **{best[0]}** — net immédiat le plus élevé ({best[1]:,.0f}€)",
         "",
         "### Points d'attention",
     ]
 
     if structure == "sasu":
         lines += [
-            "- **SASU** : dividendes soumis au PFU 30% uniquement (pas de cotisations sociales)",
+            f"- **SASU** : dividendes soumis au PFU {pct_fr(PFU_CAPITAL)} uniquement (pas de cotisations sociales)",
             "- Une rémunération élevée génère des droits à la retraite et une meilleure protection sociale",
         ]
     else:
@@ -7535,7 +7995,7 @@ def tool_optimiser_remuneration_dirigeant(args: Dict) -> str:
 
     lines += [
         "- L'optimisation dépend aussi de votre besoin de trésorerie, retraite et protection sociale",
-        "- ⚠️ Simulation simplifiée. Consultez un expert-comptable pour votre situation précise.",
+        "- Simulation simplifiée. Consultez un expert-comptable pour votre situation précise.",
         "",
         "---",
         "*Source : CGI art. 13, 62, 158 — CSS art. L131-6 — Taux IS art. 219*",
@@ -7563,9 +8023,9 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
         tmi = float(args.get("tmi", 30))
 
     SEUIL_IMPOSITION = 305.0
-    PFU_IR = 12.8
-    PFU_PS = 17.2
-    PFU_TOTAL = 30.0
+    TAUX_IR_PFU = PFU_IR * 100
+    TAUX_PS_PFU = PS_CAPITAL * 100
+    TAUX_PFU = PFU_CAPITAL * 100
 
     lines = [
         f"# Fiscalité des Cryptomonnaies {ANNEE_DECLARATION}",
@@ -7605,7 +8065,7 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
         # Seuil d'imposition
         if prix_cession <= SEUIL_IMPOSITION:
             lines += [
-                f"## ✅ Exonération — Cessions ≤ {SEUIL_IMPOSITION}€/an",
+                f"## Exonération — Cessions ≤ {SEUIL_IMPOSITION}€/an",
                 f"Total de cessions : {prix_cession:.2f}€ ≤ 305€ → **aucune imposition**",
                 "*(Le seuil de 305€ s'applique au total des cessions, pas à la plus-value)*",
             ]
@@ -7616,9 +8076,9 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
                 f"**Moins-value reportable sur les 10 prochaines années : {abs(pv_apres_mv):,.2f}€**",
             ]
         else:
-            pfu_ir_amount = pv_apres_mv * PFU_IR / 100
-            pfu_ps_amount = pv_apres_mv * PFU_PS / 100
-            pfu_total_amount = pv_apres_mv * PFU_TOTAL / 100
+            pfu_ir_amount = pv_apres_mv * PFU_IR
+            pfu_ps_amount = pv_apres_mv * PS_CAPITAL
+            pfu_total_amount = pv_apres_mv * PFU_CAPITAL
 
             # Option barème
             if rni_hors_crypto > 0:
@@ -7626,19 +8086,19 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
                              - calculer_ir(rni_hors_crypto, nb_parts)["impot_net"])
             else:
                 ir_bareme = pv_apres_mv * tmi / 100
-            ps_bareme = pv_apres_mv * PFU_PS / 100
+            ps_bareme = pv_apres_mv * PS_CAPITAL
             total_bareme = ir_bareme + ps_bareme
 
             lines += [
                 "## Imposition de la plus-value",
                 "",
-                "### Option A — PFU 30% (régime par défaut)",
-                f"| IR 12.8% | PS 17.2% | **Total PFU** |",
+                f"### Option A - PFU {pct_fr(PFU_CAPITAL)} (régime par défaut)",
+                f"| IR {pct_fr(PFU_IR)} | PS {pct_fr(PS_CAPITAL)} | **Total PFU** |",
                 f"|----------|----------|--------------|",
                 f"| {pfu_ir_amount:,.2f}€ | {pfu_ps_amount:,.2f}€ | **{pfu_total_amount:,.2f}€** |",
                 "",
                 f"### Option B — Barème IR progressif + PS (TMI {tmi:.0f}%)",
-                f"| IR barème ({tmi:.0f}%) | PS 17.2% | **Total barème** |",
+                f"| IR barème ({tmi:.0f}%) | PS {pct_fr(PS_CAPITAL)} | **Total barème** |",
                 f"|-------------------|----------|-----------------|",
                 f"| {ir_bareme:,.2f}€ | {ps_bareme:,.2f}€ | **{total_bareme:,.2f}€** |",
                 "",
@@ -7646,12 +8106,12 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
 
             if total_bareme < pfu_total_amount:
                 lines += [
-                    f"✅ **Option barème plus favorable** : économie de {pfu_total_amount - total_bareme:,.2f}€",
+                    f"**Option barème plus favorable** : économie de {pfu_total_amount - total_bareme:,.2f}€",
                     "(Cochez la case 3CN de la 2042 C pour opter pour le barème)",
                 ]
             else:
                 lines += [
-                    f"✅ **PFU 30% plus favorable** : économie de {total_bareme - pfu_total_amount:,.2f}€",
+                    f"**PFU {pct_fr(PFU_CAPITAL)} plus favorable** : économie de {total_bareme - pfu_total_amount:,.2f}€",
                 ]
 
             if mv_anterieures > 0 and pv_brute > 0:
@@ -7663,7 +8123,7 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
                 ]
     else:
         lines += [
-            "## ⚠️ Paramètres insuffisants",
+            "## Paramètres insuffisants",
             "Pour calculer la PV selon la méthode officielle, fournissez :",
             "- `valeur_portefeuille_avant_cession` : valeur totale du portefeuille AVANT la cession",
             "- `prix_acquisition_moyen_portefeuille` : PAMC (total des prix d'acquisition cumulés)",
@@ -7686,7 +8146,7 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
             ir_staking = rev_staking * tmi / 100
             lines.append(
                 f"| Staking / DeFi / Yield farming | {rev_staking:,.0f}€ | **BNC** (art. 92 CGI) | "
-                f"Barème IR → ~{ir_staking:,.0f}€ + PS 17.2% |"
+                f"Barème IR → ~{ir_staking:,.0f}€ + PS {pct_fr(PS_CAPITAL)} |"
             )
         if rev_mining > 0:
             ir_mining = rev_mining * tmi / 100
@@ -7698,11 +8158,11 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
             ir_nft = rev_nft * tmi / 100
             lines.append(
                 f"| NFT (créateur/vente) | {rev_nft:,.0f}€ | **BNC** | "
-                f"~{ir_nft:,.0f}€ + PS 17.2% |"
+                f"~{ir_nft:,.0f}€ + PS {pct_fr(PS_CAPITAL)} |"
             )
         lines += [
             "",
-            "⚠️ Ces revenus s'ajoutent au RNI et sont imposés au barème progressif (+ prélèvements sociaux).",
+            "Ces revenus s'ajoutent au RNI et sont imposés au barème progressif (+ prélèvements sociaux).",
             "À déclarer case **5HQ** (BNC non professionnel) ou **5KU** (BIC).",
         ]
 
@@ -7715,10 +8175,12 @@ def tool_calculer_fiscalite_crypto(args: Dict) -> str:
         "- Conservation des justificatifs : historique des transactions, prix d'achat",
         "",
         "## Points de vigilance",
-        "- L'échange crypto→crypto est **imposable** depuis 2019 (sauf si dans un même wallet)",
-        "  Wait — depuis 2022 : crypto→crypto dans le même wallet = non imposable ; crypto→euros ou biens = imposable",
-        "- Les échanges crypto/crypto sur des exchanges différents sont imposables",
-        "- Stablecoins : une conversion USDC→EUR est un événement imposable",
+        "- L'échange crypto→crypto est une **opération intercalaire non imposable** "
+        "(art. 150 VH bis CGI), y compris entre deux plateformes différentes",
+        "- Le fait générateur est la cession contre une monnaie ayant cours légal, "
+        "l'achat d'un bien ou d'un service, ou l'échange avec soulte",
+        "- Stablecoins : un stablecoin reste un actif numérique, BTC→USDC n'est donc pas "
+        "imposable, mais USDC→EUR l'est",
         "",
         "---",
         "*Source : CGI art. 150 VH bis — BOFiP BIC-CHAMP-60-50 — LFR 2022*",
@@ -7821,7 +8283,7 @@ def tool_simuler_pacte_dutreil(args: Dict) -> str:
         f"| Droits par bénéficiaire | {droits_sans:,.0f}€ | {droits_avec:,.0f}€ |",
         f"| **Droits totaux ({nb_donataires} bénéficiaire(s))** | **{total_sans:,.0f}€** | **{total_avec:,.0f}€** |",
         "",
-        f"### ✅ Économie grâce au pacte Dutreil : **{economie:,.0f}€** ({taux_reduction:.0f}% de réduction)",
+        f"### Économie grâce au pacte Dutreil : **{economie:,.0f}€** ({taux_reduction:.0f}% de réduction)",
         "",
         "## Conditions du pacte Dutreil",
         "",
@@ -7843,7 +8305,7 @@ def tool_simuler_pacte_dutreil(args: Dict) -> str:
     if not donateur_dirigeant:
         lines += [
             "",
-            "⚠️ **Attention** : le donateur n'est pas déclaré comme dirigeant.",
+            "**Attention** : le donateur n'est pas déclaré comme dirigeant.",
             "Le donataire ou un autre signataire de l'ECC devra assurer la direction.",
         ]
 
@@ -7898,7 +8360,7 @@ def tool_simuler_sci(args: Dict) -> str:
         deficit_imputable_rg = 0.0
         deficit_report = 0.0
         ir_sur_loyers = qp_resultat_ir * tmi / 100
-        ps_sur_loyers = qp_resultat_ir * 0.172
+        ps_sur_loyers = qp_resultat_ir * PS_IMMOBILIER
         economie_deficit = 0.0
 
     net_apres_impot_ir = qp_loyers - qp_charges_ir - ir_sur_loyers - ps_sur_loyers + economie_deficit
@@ -7920,7 +8382,7 @@ def tool_simuler_sci(args: Dict) -> str:
     resultat_apres_is = resultat_is - is_annuel
     # Si distribution de tout le résultat en dividendes :
     qp_dividendes = resultat_apres_is * quote_part
-    pfu_dividendes = qp_dividendes * 0.30
+    pfu_dividendes = qp_dividendes * PFU_CAPITAL
     net_dividendes = qp_dividendes - pfu_dividendes
     net_apres_impot_is = (loyers - charges - interets) * quote_part * (1 - 0.30) - amort_annuel * quote_part * 0.30
     # Simplifié : rendement locatif net après IS + PFU sur dividendes
@@ -7957,7 +8419,7 @@ def tool_simuler_sci(args: Dict) -> str:
 
     pv_taxable_ir = plus_value_estimee * (pv_imposable_ir_pct / 100)
     pv_taxable_ps = plus_value_estimee * (1 - abatt_ps_pct / 100)
-    impot_sortie_ir = pv_taxable_ir * 0.19 + pv_taxable_ps * 0.172
+    impot_sortie_ir = pv_taxable_ir * IR_PV_IMMOBILIERE + pv_taxable_ps * PS_IMMOBILIER
 
     # SCI IS : la base de plus-value est valeur de cession - valeur nette comptable (après amortissements)
     vnc = max(0, valeur_bien - amort_annuel * horizon)  # valeur nette comptable
@@ -7965,7 +8427,7 @@ def tool_simuler_sci(args: Dict) -> str:
     pv_is_imposable = max(0, pv_is)
     is_pv = (42_500 * 0.15 + max(0, pv_is_imposable - 42_500) * 0.25) if pv_is_imposable > 0 else 0
     net_apres_is_pv = pv_is_imposable - is_pv
-    pfu_sur_net = net_apres_is_pv * 0.30  # distribution en dividendes
+    pfu_sur_net = net_apres_is_pv * PFU_CAPITAL  # distribution en dividendes
     impot_sortie_is = is_pv + pfu_sur_net
 
     lines = [
@@ -7989,8 +8451,8 @@ def tool_simuler_sci(args: Dict) -> str:
         f"| Amortissement du bien (3.33%/an) | — | -{amort_annuel * quote_part:,.0f}€ |",
         f"| Résultat avant impôt | {qp_resultat_ir:,.0f}€ | {resultat_is * quote_part:,.0f}€ |",
         f"| IS (15%/25%) | — | -{is_annuel * quote_part:,.0f}€ |",
-        f"| IR + PS 17.2% (TMI {tmi}%) | -{ir_sur_loyers + ps_sur_loyers:,.0f}€ | — |",
-        f"| PFU 30% si distribution dividendes | — | -{pfu_dividendes:,.0f}€ |",
+        f"| IR + PS {pct_fr(PS_IMMOBILIER)} (TMI {tmi}%) | -{ir_sur_loyers + ps_sur_loyers:,.0f}€ | — |",
+        f"| PFU {pct_fr(PFU_CAPITAL)} si distribution dividendes | — | -{pfu_dividendes:,.0f}€ |",
         f"| **Cash-flow net annuel** | **{net_apres_impot_ir:,.0f}€** | **{cash_flow_is:,.0f}€** |",
         f"| **Rendement net** | **{rendement_net_ir:.2f}%** | **{rendement_net_is:.2f}%** |",
         "",
@@ -7998,7 +8460,7 @@ def tool_simuler_sci(args: Dict) -> str:
 
     if qp_resultat_ir < 0:
         lines += [
-            "### ℹ️ Déficit foncier (SCI IR)",
+            "### Déficit foncier (SCI IR)",
             f"- Déficit total quote-part : {abs(qp_resultat_ir):,.0f}€",
             f"- Imputable sur revenu global : {deficit_imputable_rg:,.0f}€ → économie IR : ~{economie_deficit:,.0f}€",
             f"- Report sur revenus fonciers futurs : {deficit_report:,.0f}€",
@@ -8018,23 +8480,23 @@ def tool_simuler_sci(args: Dict) -> str:
         "",
         "## 3. Analyse et recommandation",
         "",
-        "### ✅ SCI à l'IR recommandée si :",
+        "### SCI à l'IR recommandée si :",
         "- TMI ≤ 30% (fiscalité des revenus fonciers supportable)",
         "- Vous avez des charges/travaux importants générant un déficit foncier",
         "- Objectif de détention > 22 ans (exonération IR totale à 22 ans, PS à 30 ans)",
         "- Objectif de transmission facilitée (cessions de parts sans frais notariaux)",
         "",
-        "### ✅ SCI à l'IS recommandée si :",
+        "### SCI à l'IS recommandée si :",
         "- TMI ≥ 41% (IS 15%/25% < TMI + PS)",
         "- Nombreux travaux permettant de gros amortissements",
         "- Horizon de détention ≤ 15 ans (avant que l'effet des amortissements se retourne)",
         "- Réinvestissement des bénéfices dans la société (pas de distribution)",
         "",
-        "### ⚠️ Piège de la SCI IS à la revente",
+        "### Piège de la SCI IS à la revente",
         f"- Amortissements cumulés sur {horizon} ans : {amort_annuel * horizon:,.0f}€",
         f"- VNC du bien : {vnc:,.0f}€ (au lieu de {valeur_bien:,.0f}€ à l'achat)",
         "- La PV imposable est calculée sur le prix de vente MOINS la VNC → base très élevée",
-        "- Double imposition : IS sur la PV + PFU 30% sur la distribution",
+        f"- Double imposition : IS sur la PV + PFU {pct_fr(PFU_CAPITAL)} sur la distribution",
         "",
         "---",
         "*Source : CGI art. 8, 219, 238 bis K — BOFiP BIC-BASE-20*",
@@ -8072,12 +8534,15 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
         decote_trimestres = min(manquants, 20) if age_depart < AGE_TAUX_PLEIN_AUTO else 0
         decote_pct = decote_trimestres * TAUX_DECOTE / 100
 
-        # Surcote : 1.25%/trimestre au-delà du taux plein après l'âge légal
-        surcote_trimestres = max(0, trimestres_au_depart - TRIMESTRES_TAUX_PLEIN) if trimestres_au_depart >= TRIMESTRES_TAUX_PLEIN else 0
+        # Surcote : 1.25%/trimestre cotisé au-delà du taux plein ET de l'âge légal
+        if trimestres_au_depart > TRIMESTRES_TAUX_PLEIN and age_depart >= AGE_LEGAL:
+            surcote_trimestres = trimestres_au_depart - TRIMESTRES_TAUX_PLEIN
+        else:
+            surcote_trimestres = 0
         surcote_pct = surcote_trimestres * TAUX_SURCOTE / 100
 
-        taux_effectif = SAM_COEFF * (1 - decote_pct) * (1 + surcote_pct)
-        taux_effectif = min(taux_effectif, SAM_COEFF)  # plafond à 50%
+        # Le taux plein est plafonné à 50% du SAM ; la surcote s'y ajoute ensuite
+        taux_effectif = min(SAM_COEFF * (1 - decote_pct), SAM_COEFF) * (1 + surcote_pct)
 
         prorata = min(trimestres_au_depart / TRIMESTRES_TAUX_PLEIN, 1.0)
         pension_brute = sam * taux_effectif * prorata
@@ -8096,7 +8561,8 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
 
     # Fiscalité de la pension
     def calc_ir_pension(pension_annuelle: float, parts: float) -> float:
-        abatt = max(422, min(4_321, pension_annuelle * 0.10))
+        abatt = max(ABATTEMENT_PENSION_MIN, min(ABATTEMENT_PENSION_MAX,
+                                                pension_annuelle * ABATTEMENT_PENSION_TAUX))
         rni = max(0, pension_annuelle - abatt)
         return calculer_ir(rni, parts)["impot_net"]
 
@@ -8105,7 +8571,8 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
 
     lines = [
         "# Simulation Départ à la Retraite",
-        f"*(Réforme retraites 2023 — âge légal : {AGE_LEGAL} ans)*",
+        f"*(Réforme 2023, âge légal {AGE_LEGAL} ans, suspendue du {RETRAITE_SUSPENSION['date_debut']} "
+        f"au {RETRAITE_SUSPENSION['date_fin']} pour les générations 1964 à 1968)*",
         "",
         "## Paramètres",
         f"- Salaire annuel brut : {salaire_brut:,.0f}€",
@@ -8124,7 +8591,7 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
         if age_dep < AGE_LEGAL:
             # Avant l'âge légal : carrière longue ou inaccessible
             trim_dep = trimestres + (age_dep - age_actuel) * trimestres_annee
-            note = " ⚠️ (carrière longue requis)"
+            note = " (carrière longue requis)"
         else:
             trim_dep = trimestres + (age_dep - age_actuel) * trimestres_annee
             note = ""
@@ -8164,12 +8631,13 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
             f"- **Surcote** : {r64['surcote_trim']} trimestres supplémentaires × 1.25% = **+{r64['surcote_pct']:.1f}%**",
         ]
     else:
-        lines.append("- Taux plein atteint ✅")
+        lines.append("- Taux plein atteint")
 
     lines += [
         "",
         "## Abattement fiscal sur les pensions",
-        "- Abattement 10% sur les pensions (min 422€ / max 4 321€ par pensionné)",
+        f"- Abattement 10% sur les pensions (plancher {ABATTEMENT_PENSION_MIN}€ par pensionné, "
+        f"plafond {ABATTEMENT_PENSION_MAX:,}€ par foyer fiscal)",
         "- Prélèvements sociaux : CSG 8.3% + CRDS 0.5% + Casa 0.3% = **9.1%** (si pension > 1 362€/mois)",
         "- Réduction si pension modeste (CSG 3.8% ou 6.6% selon le RFR)",
     ]
@@ -8212,6 +8680,38 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
             f"- IR estimé en cumul : {ir_cumul:,.0f}€/an (pension + salaire)",
         ]
 
+    annee_naissance = ANNEE_DECLARATION - age_actuel
+    lines += [
+        "",
+        f"## Suspension de la réforme 2023 (depuis le {RETRAITE_SUSPENSION['date_debut']})",
+        "",
+        f"La LFSS 2026 gèle le relèvement de l'âge légal et de la durée d'assurance pour les "
+        f"pensions prenant effet entre le {RETRAITE_SUSPENSION['date_debut']} et le "
+        f"{RETRAITE_SUSPENSION['date_fin']}. Cinq générations sont concernées.",
+        "",
+        "| Génération | Âge légal pendant la suspension | Trimestres | Sans suspension |",
+        "|------------|--------------------------------|-----------|-----------------|",
+    ]
+    for gen, p in RETRAITE_SUSPENSION["generations"].items():
+        marque = " (vous)" if gen == annee_naissance else ""
+        lines.append(f"| {gen}{marque} | {p['age']} | {p['trimestres']} | {p['avant']} |")
+
+    if annee_naissance in RETRAITE_SUSPENSION["generations"]:
+        p = RETRAITE_SUSPENSION["generations"][annee_naissance]
+        lines += [
+            "",
+            f"> Né(e) en {annee_naissance}, vous partez au plus tôt à **{p['age']}** avec "
+            f"**{p['trimestres']} trimestres** requis, au lieu de {p['avant']}. "
+            "Le simulateur ci-dessus retient les paramètres de droit commun : votre âge de départ "
+            "réel est donc plus favorable.",
+        ]
+    else:
+        lines += [
+            "",
+            f"> Né(e) en {annee_naissance}, vous n'êtes pas dans le champ de la suspension. "
+            "Au-delà du 1er janvier 2028, le calendrier de 2023 reprend, sauf nouvelle loi.",
+        ]
+
     lines += [
         "",
         "## Points de vigilance",
@@ -8220,11 +8720,11 @@ def tool_simuler_depart_retraite(args: Dict) -> str:
         "- Majoration : +10% de pension à partir du 3ème enfant",
         "- Réversion au conjoint : 54% de la pension du défunt (sous conditions de ressources)",
         "",
-        "> ℹ️ Simulation indicative. Pour une estimation précise, consultez votre relevé de carrière",
+        "> Simulation indicative. Pour une estimation précise, consultez votre relevé de carrière",
         "> sur **info-retraite.fr** et les organismes de retraite complémentaire (AGIRC-ARRCO).",
         "",
         "---",
-        "*Source : CSS art. L351-1 — Décret n°2023-436 (réforme 2023) — Circulaire CNAV*",
+        "*Sources : CSS art. L351-1, décret n° 2023-436 (réforme 2023), LFSS 2026 (suspension), circulaire Cnav*",
     ]
     return "\n".join(lines)
 
@@ -8334,7 +8834,7 @@ def tool_guide_fiscalite_agricole(args: Dict) -> str:
                     f"- Bénéfice après DEP : {benefice_apres_dep:,.0f}€",
                     f"- **Économie d'IR estimée : {economie_dep:,.0f}€**",
                     "",
-                    "⚠️ Les sommes déposées en DEP doivent être utilisées dans les 10 ans",
+                    "Les sommes déposées en DEP doivent être utilisées dans les 10 ans",
                     "pour des dépenses professionnelles (aléas économiques/climatiques, investissements).",
                 ]
             else:
@@ -8422,14 +8922,14 @@ def tool_guide_fiscalite_outremer(args: Dict) -> str:
 
     # Abattements DOM (Art. 197 CGI)
     ABATTEMENTS_DOM = {
-        "guadeloupe":   {"taux": 0.30, "max": 5_100, "label": "Guadeloupe"},
-        "martinique":   {"taux": 0.30, "max": 5_100, "label": "Martinique"},
-        "reunion":      {"taux": 0.30, "max": 5_100, "label": "La Réunion"},
-        "guyane":       {"taux": 0.40, "max": 6_700, "label": "Guyane"},
-        "mayotte":      {"taux": 0.40, "max": 6_700, "label": "Mayotte"},
+        "guadeloupe": {"taux": 0.30, "max": 5_100, "label": "Guadeloupe"},
+        "martinique": {"taux": 0.30, "max": 5_100, "label": "Martinique"},
+        "reunion": {"taux": 0.30, "max": 5_100, "label": "La Réunion"},
+        "guyane": {"taux": 0.40, "max": 6_700, "label": "Guyane"},
+        "mayotte": {"taux": 0.40, "max": 6_700, "label": "Mayotte"},
         "saint_martin": {"taux": 0.30, "max": 5_100, "label": "Saint-Martin"},
         "saint_barthelemy": {"taux": None, "max": None, "label": "Saint-Barthélemy"},
-        "polynesie":    {"taux": None, "max": None, "label": "Polynésie française"},
+        "polynesie": {"taux": None, "max": None, "label": "Polynésie française"},
         "nouvelle_caledonie": {"taux": None, "max": None, "label": "Nouvelle-Calédonie"},
         "saint_pierre_miquelon": {"taux": 0.30, "max": 5_100, "label": "Saint-Pierre-et-Miquelon"},
         "wallis_futuna": {"taux": None, "max": None, "label": "Wallis-et-Futuna"},
@@ -8458,7 +8958,7 @@ def tool_guide_fiscalite_outremer(args: Dict) -> str:
             "wallis_futuna": "Pas d'impôt direct — régime fiscal très spécifique",
         }
         lines += [
-            f"## ⚠️ Collectivité à fiscalité propre",
+            f"## Collectivité à fiscalité propre",
             f"**{label}** n'est pas soumis au Code Général des Impôts français.",
             f"- Régime : {regimes_propres.get(territoire, 'Fiscalité locale spécifique')}",
             "",
@@ -8570,11 +9070,11 @@ def tool_guide_fiscalite_outremer(args: Dict) -> str:
     # Spécificités par territoire
     lines += ["", "## Points spécifiques par territoire", ""]
     specifiques = {
-        "guadeloupe":  "TVA applicable (taux 8.5% réduit, 2.1% super-réduit). Octroi de mer sur importations.",
-        "martinique":  "TVA applicable (taux 8.5%/2.1%). Octroi de mer. Zone franche urbaine Fort-de-France.",
-        "reunion":     "TVA applicable (8.5%/2.1%). Octroi de mer. Nombreuses ZFU et zones d'aide à finalité régionale.",
-        "guyane":      "Pas de TVA (régime de l'octroi de mer uniquement). Exonérations renforcées entreprises.",
-        "mayotte":     "TVA applicable depuis 2014. Fiscalité en convergence progressive avec la métropole.",
+        "guadeloupe": "TVA applicable (taux 8.5% réduit, 2.1% super-réduit). Octroi de mer sur importations.",
+        "martinique": "TVA applicable (taux 8.5%/2.1%). Octroi de mer. Zone franche urbaine Fort-de-France.",
+        "reunion": "TVA applicable (8.5%/2.1%). Octroi de mer. Nombreuses ZFU et zones d'aide à finalité régionale.",
+        "guyane": "Pas de TVA (régime de l'octroi de mer uniquement). Exonérations renforcées entreprises.",
+        "mayotte": "TVA applicable depuis 2014. Fiscalité en convergence progressive avec la métropole.",
         "saint_martin": "Collectivité d'outre-mer. Fiscalité propre partielle. Pas d'octroi de mer.",
     }
     if territoire in specifiques:
@@ -8640,9 +9140,9 @@ def tool_simuler_assurance_vie(args: Dict) -> str:
         "",
         f"| Ancienneté | Taux IR sur intérêts | Abattement annuel |",
         f"|-----------|---------------------|-------------------|",
-        f"| < 4 ans | PFU 12.8% + PS 17.2% = **30%** | Aucun |",
-        f"| 4 à 8 ans | PFU 12.8% + PS 17.2% = **30%** | Aucun |",
-        f"| ≥ 8 ans | **7.5%** + PS 17.2% = **24.7%** | **{abattement:,}€/an** |",
+        f"| < 4 ans | PFU {pct_fr(PFU_IR)} + PS {pct_fr(PS_ASSURANCE_VIE)} = **{pct_fr(PFU_ASSURANCE_VIE)}** | Aucun |",
+        f"| 4 à 8 ans | PFU {pct_fr(PFU_IR)} + PS {pct_fr(PS_ASSURANCE_VIE)} = **{pct_fr(PFU_ASSURANCE_VIE)}** | Aucun |",
+        f"| ≥ 8 ans | **{pct_fr(PFU_AV_TAUX_REDUIT)}** + PS {pct_fr(PS_ASSURANCE_VIE)} = **{pct_fr(PFU_AV_REDUIT_TOTAL)}** | **{abattement:,}€/an** |",
         "",
     ]
 
@@ -8660,54 +9160,54 @@ def tool_simuler_assurance_vie(args: Dict) -> str:
         if anciennete >= 8:
             interets_imposables = max(0, interets_rachat - abattement)
             ir_7_5 = interets_imposables * 0.075
-            ps = interets_rachat * 0.172
+            ps = interets_rachat * PS_ASSURANCE_VIE
             total_fiscal = ir_7_5 + ps
             net_rachat = montant_rachat - total_fiscal
             lines += [
                 f"**Contrat ≥ 8 ans :**",
                 f"- Intérêts imposables après abattement {abattement:,}€ : {interets_imposables:,.0f}€",
                 f"- IR 7.5% : {ir_7_5:,.0f}€",
-                f"- PS 17.2% sur {interets_rachat:,.0f}€ : {ps:,.0f}€",
+                f"- PS {pct_fr(PS_ASSURANCE_VIE)} sur {interets_rachat:,.0f}€ : {ps:,.0f}€",
                 f"- **Net reçu : {net_rachat:,.0f}€** (fiscalité : {total_fiscal:,.0f}€)",
             ]
             # Comparaison option barème
             nb_parts = calculer_parts(situation, nb_enfants)
             ir_bareme = calculer_ir(interets_imposables, nb_parts)["impot_net"]
             if ir_bareme < ir_7_5:
-                lines.append(f"- ✅ Option barème IR plus favorable : {ir_bareme:,.0f}€ < {ir_7_5:,.0f}€")
+                lines.append(f"- Option barème IR plus favorable : {ir_bareme:,.0f}€ < {ir_7_5:,.0f}€")
         else:
-            ir_pfu = interets_rachat * 0.128
-            ps = interets_rachat * 0.172
+            ir_pfu = interets_rachat * PFU_IR
+            ps = interets_rachat * PS_ASSURANCE_VIE
             total_fiscal = ir_pfu + ps
             net_rachat = montant_rachat - total_fiscal
             lines += [
-                f"**Contrat < 8 ans — PFU 30% :**",
-                f"- IR 12.8% : {ir_pfu:,.0f}€",
-                f"- PS 17.2% : {ps:,.0f}€",
+                f"**Contrat < 8 ans - PFU {pct_fr(PFU_ASSURANCE_VIE)} :**",
+                f"- IR {pct_fr(PFU_IR)} : {ir_pfu:,.0f}€",
+                f"- PS {pct_fr(PS_ASSURANCE_VIE)} : {ps:,.0f}€",
                 f"- **Net reçu : {net_rachat:,.0f}€** (fiscalité : {total_fiscal:,.0f}€)",
                 "",
-                f"💡 **Conseil : attendez 8 ans** pour bénéficier du taux 7.5% + abattement {abattement:,}€",
+                f"**Conseil : attendez 8 ans** pour bénéficier du taux 7.5% + abattement {abattement:,}€",
             ]
 
     elif type_operation == "rachat_total":
         if anciennete >= 8:
             interets_imposables = max(0, plus_value_totale - abattement)
             ir_7_5 = interets_imposables * 0.075
-            ps = plus_value_totale * 0.172
+            ps = plus_value_totale * PS_ASSURANCE_VIE
             total_fiscal = ir_7_5 + ps
             net = capital - total_fiscal
             lines += [
                 f"### Rachat total",
                 f"- Plus-value imposable après abattement {abattement:,}€ : {interets_imposables:,.0f}€",
                 f"- IR 7.5% : {ir_7_5:,.0f}€",
-                f"- PS 17.2% sur {plus_value_totale:,.0f}€ : {ps:,.0f}€",
+                f"- PS {pct_fr(PS_ASSURANCE_VIE)} sur {plus_value_totale:,.0f}€ : {ps:,.0f}€",
                 f"- **Net perçu : {net:,.0f}€**",
             ]
         else:
-            pfu = plus_value_totale * 0.30
+            pfu = plus_value_totale * PFU_ASSURANCE_VIE
             net = capital - pfu
             lines += [
-                f"### Rachat total — PFU 30%",
+                f"### Rachat total - PFU {pct_fr(PFU_ASSURANCE_VIE)}",
                 f"- Fiscalité sur {plus_value_totale:,.0f}€ : {pfu:,.0f}€",
                 f"- **Net perçu : {net:,.0f}€**",
             ]
@@ -8754,7 +9254,7 @@ def tool_simuler_assurance_vie(args: Dict) -> str:
             f"- Abattement global : {abatt_70:,}€ (tous bénéficiaires confondus)",
             f"- Primes après 70 ans : {primes_apres_70:,.0f}€",
             f"- Base soumise aux droits de succession : {base_succession:,.0f}€",
-            "- ⚠️ Les gains sont exonérés — seules les primes nettes sont taxées",
+            "- Les gains sont exonérés — seules les primes nettes sont taxées",
         ]
 
     lines += [
@@ -8763,7 +9263,7 @@ def tool_simuler_assurance_vie(args: Dict) -> str:
         "- **Hors succession** : capital transmis sans droits jusqu'à 152 500€/bénéficiaire (avant 70 ans)",
         "- **Conjoint ou partenaire PACS** : totalement exonéré quel que soit le montant",
         f"- **Abattement annuel** sur les rachats après 8 ans : {abattement:,}€",
-        "- **Taux préférentiel** 7.5% (au lieu de 12.8% PFU) après 8 ans",
+        f"- **Taux préférentiel** {pct_fr(PFU_AV_TAUX_REDUIT)} (au lieu de {pct_fr(PFU_IR)} PFU) après 8 ans",
         "- **Clause bénéficiaire** : désignez nominativement chaque bénéficiaire",
         "",
         "---",
@@ -8989,14 +9489,14 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
         "",
     ]
 
-    # ── Option A : PFU 30% (sans abattement) ─────────────────────────────
-    pfu = pv_brute * 0.30
+    # ── Option A : PFU (sans abattement) ─────────────────────────────────
+    pfu = pv_brute * PFU_CAPITAL
     net_pfu = pv_brute - pfu
 
     lines += [
-        "## Option A — PFU 30% (Prélèvement Forfaitaire Unique)",
+        f"## Option A - PFU {pct_fr(PFU_CAPITAL)} (Prélèvement Forfaitaire Unique)",
         "*(Régime par défaut depuis 2018)*",
-        f"- PV brute × 30% = **{pfu:,.0f}€**",
+        f"- PV brute × {pct_fr(PFU_CAPITAL)} = **{pfu:,.0f}€**",
         f"- Net après fiscalité : {net_pfu:,.0f}€",
         "",
     ]
@@ -9008,7 +9508,7 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
     pv_abatt_comm = pv_brute * (1 - ab_comm)
 
     ir_renf = calculer_ir(pv_abatt_renf, nb_parts)["impot_net"] if pv_abatt_renf > 0 else 0
-    ps_renf = pv_brute * 0.172  # PS sur PV brute (les abattements ne s'appliquent pas aux PS)
+    ps_renf = pv_brute * PS_CAPITAL  # PS sur PV brute (les abattements ne s'appliquent pas aux PS)
     total_renf = ir_renf + ps_renf
 
     ir_comm = calculer_ir(pv_abatt_comm, nb_parts)["impot_net"] if pv_abatt_comm > 0 else 0
@@ -9024,7 +9524,7 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
         f"| Abattement | **{ab_renf*100:.0f}%** ({duree_detention_ans} ans de détention) | **{ab_comm*100:.0f}%** |",
         f"| PV après abattement | {pv_abatt_renf:,.0f}€ | {pv_abatt_comm:,.0f}€ |",
         f"| IR (barème) | {ir_renf:,.0f}€ | {ir_comm:,.0f}€ |",
-        f"| PS 17.2% (sur PV brute) | {ps_renf:,.0f}€ | {ps_renf:,.0f}€ |",
+        f"| PS {pct_fr(PS_CAPITAL)} (sur PV brute) | {ps_renf:,.0f}€ | {ps_renf:,.0f}€ |",
         f"| **Total fiscal** | **{total_renf:,.0f}€** | **{total_comm:,.0f}€** |",
         f"| Net perçu | {pv_brute - total_renf:,.0f}€ | {pv_brute - total_comm:,.0f}€ |",
         "",
@@ -9032,18 +9532,18 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
 
     meilleure = min(pfu, total_renf, total_comm)
     if meilleure == pfu:
-        lines.append("✅ **PFU 30% est le plus favorable dans votre cas**")
+        lines.append(f"**PFU {pct_fr(PFU_CAPITAL)} est le plus favorable dans votre cas**")
     elif meilleure == total_renf:
-        lines.append("✅ **Barème + abattement renforcé PME est le plus favorable**")
+        lines.append("**Barème + abattement renforcé PME est le plus favorable**")
     else:
-        lines.append("✅ **Barème + abattement droit commun est le plus favorable**")
+        lines.append("**Barème + abattement droit commun est le plus favorable**")
 
     # ── Abattement départ retraite dirigeant ─────────────────────────────
     if depart_retraite:
         ABATT_RETRAITE = 500_000
         pv_apres_abatt_retraite = max(0, pv_brute - ABATT_RETRAITE)
-        pfu_retraite = pv_apres_abatt_retraite * 0.30
-        ps_retraite = pv_brute * 0.172  # PS sur PV brute avant abattement retraite
+        pfu_retraite = pv_apres_abatt_retraite * PFU_IR
+        ps_retraite = pv_brute * PS_CAPITAL  # PS sur PV brute avant abattement retraite
         total_retraite = pfu_retraite + ps_retraite
         economie_retraite = pfu - total_retraite
 
@@ -9053,8 +9553,8 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
             "",
             f"- Abattement fixe : **{ABATT_RETRAITE:,}€**",
             f"- PV imposable après abattement : {pv_apres_abatt_retraite:,.0f}€",
-            f"- IR PFU 12.8% : {pv_apres_abatt_retraite * 0.128:,.0f}€",
-            f"- PS 17.2% (sur PV brute {pv_brute:,.0f}€) : {ps_retraite:,.0f}€",
+            f"- IR PFU {pct_fr(PFU_IR)} : {pv_apres_abatt_retraite * PFU_IR:,.0f}€",
+            f"- PS {pct_fr(PS_CAPITAL)} (sur PV brute {pv_brute:,.0f}€) : {ps_retraite:,.0f}€",
             f"- **Total fiscal avec abattement retraite : {total_retraite:,.0f}€**",
             f"- Économie vs PFU sans abattement : **{economie_retraite:,.0f}€**",
             "",
@@ -9087,7 +9587,7 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
             "- La PV en report n'est imposée qu'à la cession des titres de la holding",
             "  (ou au décès de l'apporteur → exonération définitive !)",
             "",
-            "⚠️ Dispositif anti-abus : contrôle rigoureux par l'administration — consultez un avocat fiscaliste.",
+            "Dispositif anti-abus : contrôle rigoureux par l'administration — consultez un avocat fiscaliste.",
         ]
 
     lines += [
@@ -9095,7 +9595,7 @@ def tool_simuler_cession_entreprise(args: Dict) -> str:
         "## Synthèse — Mécanismes disponibles",
         "| Mécanisme | Avantage | Condition clé |",
         "|-----------|---------|---------------|",
-        "| PFU 30% | Simplicité | Aucune |",
+        f"| PFU {pct_fr(PFU_CAPITAL)} | Simplicité | Aucune |",
         "| Abatt. renforcé PME | Jusqu'à 85% d'abattement | PME < 10 ans, détention ≥ 1 an |",
         f"| Abatt. départ retraite | {500_000:,}€ d'abattement fixe | Direction ≥ 5 ans, retraite sous 24 mois |",
         "| Apport-cession | Report total de la PV | Holding contrôlée, réinvestissement 60% |",
@@ -9137,7 +9637,7 @@ def tool_simuler_holding(args: Dict) -> str:
 
     # ── Détention directe (sans holding) ─────────────────────────────────
     dividendes_directs = resultat_net_filiale * (taux_detention / 100)
-    pfu_directs = dividendes_directs * 0.30
+    pfu_directs = dividendes_directs * PFU_CAPITAL
     net_direct = dividendes_directs - pfu_directs
 
     # ── Via holding — Régime mère-fille ──────────────────────────────────
@@ -9152,7 +9652,7 @@ def tool_simuler_holding(args: Dict) -> str:
     net_holding_avant_redistrib = dividendes_holding - is_holding_sur_qpfec
     if dividendes_souhaites > 0:
         div_redistrib = min(dividendes_souhaites, net_holding_avant_redistrib)
-        pfu_redistrib = div_redistrib * 0.30
+        pfu_redistrib = div_redistrib * PFU_CAPITAL
         net_redistrib = div_redistrib - pfu_redistrib
     else:
         div_redistrib = 0
@@ -9190,7 +9690,7 @@ def tool_simuler_holding(args: Dict) -> str:
         f"|--|-------------------|--------------------------------|",
         f"| Dividendes reçus | {dividendes_directs:,.0f}€ | {dividendes_holding:,.0f}€ |",
         f"| Quote-part frais et charges (5%) | — | {quote_part_fec:,.0f}€ réintégrée |",
-        f"| IS sur les dividendes | PFU 30% = {pfu_directs:,.0f}€ | IS sur 5% = {is_holding_sur_qpfec:,.0f}€ |",
+        f"| IS sur les dividendes | PFU {pct_fr(PFU_CAPITAL)} = {pfu_directs:,.0f}€ | IS sur 5% = {is_holding_sur_qpfec:,.0f}€ |",
         f"| Taux effectif sur dividendes | 30% | **{taux_effectif_regime_mere_fille:.1f}%** |",
         f"| **Net disponible** | **{net_direct:,.0f}€** | **{net_holding_avant_redistrib:,.0f}€** |",
         f"| **Avantage holding** | | **+{economie_vs_direct:,.0f}€** |",
@@ -9206,7 +9706,7 @@ def tool_simuler_holding(args: Dict) -> str:
             f"- IS de la holding sur ce bénéfice : {is_eco:,.0f}€",
             f"- Capital net à investir : {net_reinvest:,.0f}€",
             f"- Avantage : la holding peut réinvestir {net_holding_avant_redistrib:,.0f}€",
-            f"  vs {net_direct:,.0f}€ en détention directe (après PFU 30%)",
+            f"  vs {net_direct:,.0f}€ en détention directe (après PFU {pct_fr(PFU_CAPITAL)})",
             "",
         ]
 
@@ -9214,7 +9714,7 @@ def tool_simuler_holding(args: Dict) -> str:
         lines += [
             f"## Redistribution à l'actionnaire ({dividendes_souhaites:,.0f}€ souhaités)",
             f"- Dividendes redistribués depuis la holding : {div_redistrib:,.0f}€",
-            f"- PFU 30% au niveau de l'actionnaire : {pfu_redistrib:,.0f}€",
+            f"- PFU {pct_fr(PFU_CAPITAL)} au niveau de l'actionnaire : {pfu_redistrib:,.0f}€",
             f"- **Net perçu par l'actionnaire : {net_redistrib:,.0f}€**",
             "",
             "*(La holding a déjà payé IS sur 5% → pas de double imposition sur 95%)*",
@@ -9260,11 +9760,11 @@ def tool_calculer_tva(args: Dict) -> str:
 
     # Seuils franchise en base 2025
     SEUILS = {
-        "marchandises":  {"principal": 85_000, "majore": 93_500},
-        "services":      {"principal": 37_500, "majore": 41_250},  # LF2025: abaissé de 36 800 à 37 500
-        "liberal":       {"principal": 37_500, "majore": 41_250},
-        "mixte":         {"principal": 37_500, "majore": 41_250},
-        "agricole":      {"principal": 46_000, "majore": 56_000},
+        "marchandises": {"principal": 85_000, "majore": 93_500},
+        "services": {"principal": 37_500, "majore": 41_250},  # LF2025: abaissé de 36 800 à 37 500
+        "liberal": {"principal": 37_500, "majore": 41_250},
+        "mixte": {"principal": 37_500, "majore": 41_250},
+        "agricole": {"principal": 46_000, "majore": 56_000},
     }
     seuils = SEUILS.get(type_activite, SEUILS["services"])
 
@@ -9321,7 +9821,7 @@ def tool_calculer_tva(args: Dict) -> str:
 
         if regime_applicable == "franchise":
             lines += [
-                "### ✅ Franchise en base — Aucune TVA à collecter",
+                "### Franchise en base — Aucune TVA à collecter",
                 f"- CA {ca_ht:,.0f}€ ≤ seuil {seuils['principal']:,}€",
                 "- Mentions obligatoires sur factures : **« TVA non applicable — art. 293 B CGI »**",
                 "- Avantage : simplicité, prix compétitifs B2C",
@@ -9393,6 +9893,15 @@ def tool_calculer_tva(args: Dict) -> str:
         "- **Exigibilité** : sur les débits (option) ou les encaissements (défaut pour services)",
         "- **Délai de déduction** : TVA déductible à la date de la facture fournisseur",
         "- **Prescription** : 2 ans pour réclamer un remboursement de crédit de TVA",
+        "",
+        "## Facturation électronique",
+        f"- Depuis le **{FACTURATION_ELECTRONIQUE['date_reception']}**, toute entreprise assujettie "
+        "à la TVA doit être en mesure de recevoir ses factures via une plateforme agréée",
+        f"- Émission obligatoire : {FACTURATION_ELECTRONIQUE['date_emission_ge_eti']} pour les "
+        f"grandes entreprises et les ETI, {FACTURATION_ELECTRONIQUE['date_emission_pme_tpe']} pour "
+        "les PME, TPE et micro-entreprises",
+        "- Les données transmises alimenteront le pré-remplissage des déclarations de TVA",
+        "- Détail complet : outil `guide_facturation_electronique`",
         "",
         "---",
         "*Source : CGI art. 256 à 293 B — Directive TVA 2006/112/CE*",
@@ -9495,30 +10004,30 @@ def tool_guide_auto_entrepreneur(args: Dict) -> str:
         ]
         if eligible_vfl:
             lines += [
-                f"**Option B — Versement Libératoire Forfaitaire (VFL)** ✅ Éligible",
+                f"**Option B — Versement Libératoire Forfaitaire (VFL)** Éligible",
                 f"- Taux : {vfl_taux*100:.1f}% du CA",
                 f"- Montant VFL : {vfl_montant:,.0f}€ (prélevé avec les cotisations mensuelles/trimestrielles)",
                 "- L'IR est soldé : pas de régularisation en fin d'année",
             ]
             if rni_foyer > 0:
                 lines.append(
-                    f"- RFR N-2 : {rni_foyer:,.0f}€ ≤ seuil {seuil_vfl:,.0f}€ → éligible ✅"
+                    f"- RFR N-2 : {rni_foyer:,.0f}€ ≤ seuil {seuil_vfl:,.0f}€ → éligible "
                 )
             # Comparaison
             if revenu_imposable > 0:
                 ir_bareme_estime = revenu_imposable * 0.11  # TMI 11% par défaut, approximatif
                 if vfl_montant < ir_bareme_estime:
-                    lines.append(f"- 💡 VFL souvent avantageux si TMI ≥ {vfl_taux/(1-act['abattement_ir'])*100:.0f}%")
+                    lines.append(f"- VFL souvent avantageux si TMI ≥ {vfl_taux/(1-act['abattement_ir'])*100:.0f}%")
         else:
             lines += [
-                f"**Option B — VFL** ⛔ Non éligible",
+                f"**Option B — VFL** : non éligible",
                 f"- RFR N-2 : {rni_foyer:,.0f}€ > seuil {seuil_vfl:,.0f}€",
             ]
 
         if ca > act["seuil_tva_franchise"]:
             lines += [
                 "",
-                f"### ⚠️ TVA",
+                f"### TVA",
                 f"CA {ca:,.0f}€ > seuil franchise {act['seuil_tva_franchise']:,}€",
                 "→ **Assujettissement à la TVA obligatoire** (ou déjà en cours d'année si seuil majoré dépassé)",
                 "→ Facturez TTC et déposez des CA3",
@@ -9544,6 +10053,18 @@ def tool_guide_auto_entrepreneur(args: Dict) -> str:
         "- **Cotisation CFE** : due dès la 2ème année (exonération la 1ère année d'activité)",
         "- **Registre des achats** : obligatoire pour les activités de vente",
         "- **Livre des recettes** : obligatoire (date, montant, nature, mode de paiement)",
+        "",
+        "## Facturation électronique",
+        f"- **{FACTURATION_ELECTRONIQUE['date_reception']}** : obligation de pouvoir **recevoir** "
+        "des factures électroniques via une plateforme agréée. La franchise en base de TVA ne "
+        "dispense pas de l'obligation : le micro-entrepreneur reste un assujetti",
+        f"- **{FACTURATION_ELECTRONIQUE['date_emission_pme_tpe']}** : obligation d'**émettre** ses "
+        "factures B2B au format électronique et de transmettre les données d'e-reporting "
+        "(ventes aux particuliers, opérations internationales)",
+        f"- Sanction : {FACTURATION_ELECTRONIQUE['sanctions']['facture_non_electronique']}€ par "
+        f"facture non conforme, dans la limite de "
+        f"{FACTURATION_ELECTRONIQUE['sanctions']['facture_plafond_annuel']:,}€ par an",
+        "- Détail complet : outil `guide_facturation_electronique`",
         "",
         "## Radiation automatique",
         "- Si CA = 0 pendant **24 mois consécutifs** → radiation automatique par l'URSSAF",
@@ -9607,7 +10128,7 @@ def tool_calculer_cfe(args: Dict) -> str:
     if premiere_annee:
         lines += [
             "",
-            "## ✅ Exonération 1ère année",
+            "## Exonération 1ère année",
             "**Exonération totale de CFE l'année de création de l'entreprise**",
             "- Pas de CFE due pour l'année de début d'activité",
             "- La CFE sera due à compter de l'année suivante",
@@ -9690,59 +10211,59 @@ def tool_simuler_investissement_pea(args: Dict) -> str:
         "## Votre PEA",
         f"- Type : {type_pea.replace('_', ' ').upper()}",
         f"- Plafond : {plafond:,}€",
-        f"- Versements cumulés : {versements:,.0f}€ ({plafond - versements:,.0f}€ de capacité restante)" if versements <= plafond else f"- Versements : {versements:,.0f}€ ⚠️ Plafond atteint",
+        f"- Versements cumulés : {versements:,.0f}€ ({plafond - versements:,.0f}€ de capacité restante)" if versements <= plafond else f"- Versements : {versements:,.0f}€ Plafond atteint",
         f"- Valeur actuelle : {valeur_actuelle:,.0f}€",
         f"- Plus-value latente : {plus_value:,.0f}€ ({taux_pv:.1f}%)",
         f"- Ancienneté : {anciennete_ans} ans",
         "",
         "## Fiscalité selon l'ancienneté",
         "",
-        "| Ancienneté | IR sur PV | PS 17.2% | Total | Clôture |",
+        f"| Ancienneté | IR sur PV | PS {pct_fr(PS_CAPITAL)} | Total | Clôture |",
         "|-----------|-----------|----------|-------|---------|",
-        "| < 2 ans | 22.5% | 17.2% | **39.7%** | Clôture obligatoire |",
-        "| 2 à 5 ans | 19% | 17.2% | **36.2%** | Clôture obligatoire |",
-        "| ≥ 5 ans | **0%** | 17.2% | **17.2%** | Retrait partiel autorisé (si > 5 ans) |",
+        f"| < 2 ans | 22,5% | {pct_fr(PS_CAPITAL)} | **{pct_fr(0.225 + PS_CAPITAL)}** | Clôture obligatoire |",
+        f"| 2 à 5 ans | 19% | {pct_fr(PS_CAPITAL)} | **{pct_fr(0.19 + PS_CAPITAL)}** | Clôture obligatoire |",
+        f"| ≥ 5 ans | **0%** | {pct_fr(PS_CAPITAL)} | **{pct_fr(PS_CAPITAL)}** | Retrait partiel autorisé (si > 5 ans) |",
         "| ≥ 5 ans (rente) | 0% | 0% | **0%** | Sortie en rente viagère exonérée |",
         "",
     ]
 
     if anciennete_ans >= 5 and valeur_actuelle > 0:
-        ps_due = plus_value * 0.172
+        ps_due = plus_value * PS_CAPITAL
         net_apres_ps = valeur_actuelle - ps_due
         lines += [
-            "## ✅ Votre PEA a plus de 5 ans — Avantage fiscal maximum",
+            "## Votre PEA a plus de 5 ans — Avantage fiscal maximum",
             "",
             f"| | Montant |",
             f"|--|---------|",
             f"| Valeur totale | {valeur_actuelle:,.0f}€ |",
-            f"| PS 17.2% sur PV {plus_value:,.0f}€ | {ps_due:,.0f}€ |",
+            f"| PS {pct_fr(PS_CAPITAL)} sur PV {plus_value:,.0f}€ | {ps_due:,.0f}€ |",
             f"| **Net après fiscalité** | **{net_apres_ps:,.0f}€** |",
             "",
         ]
         if montant_retrait > 0:
             pv_fraction = montant_retrait * (plus_value / valeur_actuelle) if valeur_actuelle > 0 else 0
-            ps_retrait = pv_fraction * 0.172
+            ps_retrait = pv_fraction * PS_CAPITAL
             lines += [
                 f"### Retrait partiel de {montant_retrait:,.0f}€",
                 f"- Fraction de PV dans le retrait : {pv_fraction:,.0f}€",
                 f"- PS dues : {ps_retrait:,.0f}€",
                 f"- Net retrait : {montant_retrait - ps_retrait:,.0f}€",
-                "- ✅ Le PEA reste ouvert après un retrait partiel (si > 5 ans)",
+                "- Le PEA reste ouvert après un retrait partiel (si > 5 ans)",
             ]
     elif anciennete_ans < 5 and plus_value > 0:
         taux_ir = 0.225 if anciennete_ans < 2 else 0.19
         ir_pv = plus_value * taux_ir
-        ps_pv = plus_value * 0.172
+        ps_pv = plus_value * PS_CAPITAL
         total = ir_pv + ps_pv
         net = valeur_actuelle - total
         lines += [
             f"## Fiscalité si clôture maintenant ({anciennete_ans} ans)",
             f"- IR {taux_ir*100:.1f}% : {ir_pv:,.0f}€",
-            f"- PS 17.2% : {ps_pv:,.0f}€",
+            f"- PS {pct_fr(PS_CAPITAL)} : {ps_pv:,.0f}€",
             f"- Total fiscal : {total:,.0f}€",
             f"- Net perçu : {net:,.0f}€",
             "",
-            f"💡 **Attendez {5 - anciennete_ans} an(s)** de plus pour économiser ~{ir_pv:,.0f}€ d'IR",
+            f"**Attendez {5 - anciennete_ans} an(s)** de plus pour économiser ~{ir_pv:,.0f}€ d'IR",
         ]
 
     lines += [
@@ -9758,12 +10279,12 @@ def tool_simuler_investissement_pea(args: Dict) -> str:
         "- Actions de sociétés de l'Union Européenne (siège dans l'UE)",
         "- OPCVM (SICAV, FCP) investis à ≥ 75% en actions UE",
         "- ETF répliquant des indices UE",
-        "- ⛔ Actions américaines, obligations, fonds monétaires : non éligibles",
+        "- Actions américaines, obligations, fonds monétaires : non éligibles",
         "",
         "## Comparaison PEA vs CTO (Compte-Titres Ordinaire)",
         "| | PEA | CTO |",
         "|--|-----|-----|",
-        "| Fiscalité après 5 ans | 17.2% (PS seulement) | 30% (PFU) |",
+        f"| Fiscalité après 5 ans | {pct_fr(PS_CAPITAL)} (PS seulement) | {pct_fr(PFU_CAPITAL)} (PFU) |",
         "| Flexibilité des retraits | Limitée avant 5 ans | Totale |",
         "| Titres éligibles | Actions UE principalement | Monde entier |",
         "| Plafond | 150 000€ | Aucun |",
@@ -9834,7 +10355,7 @@ def tool_guide_defiscalisation_solidaire(args: Dict) -> str:
         "| Dispositif | Réduction IR | Plafond investissement | Durée blocage |",
         "|-----------|-------------|------------------------|---------------|",
         "| **IR-PME classique** | 18% | 50 000€ (célibataire) / 100 000€ (couple) | 5 ans |",
-        "| **IR-PME majoré** (2025) | **25%** | idem | 5 ans |",
+        "| **IR-PME majoré** | **25%** | idem | 5 ans |",
         "| **ESUS** (entreprise solidaire) | 25% | idem | 5 ans |",
         "",
         "### Conditions IR-PME",
@@ -9866,7 +10387,7 @@ def tool_guide_defiscalisation_solidaire(args: Dict) -> str:
         "",
         "- Durée de blocage : 5 à 10 ans (généralement 8 ans)",
         "- Liquidité faible — fonds bloqués jusqu'à la dissolution",
-        "- Gains à la sortie : exonérés d'IR (mais PS 17.2%)",
+        f"- Gains à la sortie : exonérés d'IR (mais PS {pct_fr(PS_CAPITAL)})",
         "",
         "## 5. SOFICA (Financement Cinéma)",
         "",
@@ -9967,7 +10488,7 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     pv_imposable_ps = pv_brute * (1 - ab_ps)
 
     ir_pv = pv_imposable_ir * 0.19
-    ps_pv = pv_imposable_ps * 0.172
+    ps_pv = pv_imposable_ps * PS_IMMOBILIER
 
     def taxe_haute_pv(pv_nette: float) -> float:
         if pv_nette <= 50_000:
@@ -10042,7 +10563,7 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     # Exonérations
     if type_bien == "residence_principale":
         lines += [
-            "## ✅ Exonération — Résidence Principale",
+            "## Exonération — Résidence Principale",
             "La plus-value sur la **résidence principale** est **totalement exonérée**",
             "d'IR et de prélèvements sociaux.",
             "",
@@ -10054,7 +10575,7 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
 
     if duree_detention_ans >= 30:
         lines += [
-            f"## ✅ Exonération totale — {duree_detention_ans} ans de détention",
+            f"## Exonération totale — {duree_detention_ans} ans de détention",
             "Exonération d'IR (≥ 22 ans) ET de PS (≥ 30 ans) → **Aucun impôt dû**",
         ]
         return "\n".join(lines)
@@ -10062,7 +10583,7 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     lines += [
         "## Abattements pour durée de détention",
         "",
-        f"| | IR (19%) | PS (17.2%) |",
+        f"| | IR ({pct_fr(IR_PV_IMMOBILIERE, 0)}) | PS ({pct_fr(PS_IMMOBILIER)}) |",
         f"|--|----------|-----------|",
         f"| Durée de détention | {duree_detention_ans} ans | {duree_detention_ans} ans |",
         f"| Abattement | **{ab_ir*100:.1f}%** | **{ab_ps*100:.1f}%** |",
@@ -10087,7 +10608,7 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
         f"|--|---------|",
         f"| Plus-value brute | {pv_brute:,.0f}€ |",
         f"| IR 19% | {ir_pv:,.0f}€ |",
-        f"| PS 17.2% | {ps_pv:,.0f}€ |",
+        f"| PS {pct_fr(PS_IMMOBILIER)} | {ps_pv:,.0f}€ |",
     ]
     if taxe_hpv > 0:
         lines.append(f"| Taxe haute PV | {taxe_hpv:,.0f}€ |")
@@ -10115,8 +10636,8 @@ def tool_calculer_pv_immobiliere(args: Dict) -> str:
     for yr in [5, 6, 10, 15, 20, 21, 22, 25, 28, 30]:
         ab_i = abattement_ir(yr)
         ab_p = abattement_ps(yr)
-        exo_i = "✅ Exo" if ab_i >= 1.0 else f"{ab_i*100:.0f}%"
-        exo_p = "✅ Exo" if ab_p >= 1.0 else f"{ab_p*100:.1f}%"
+        exo_i = "Exo" if ab_i >= 1.0 else f"{ab_i*100:.0f}%"
+        exo_p = "Exo" if ab_p >= 1.0 else f"{ab_p*100:.1f}%"
         lines.append(f"| {yr} ans | {exo_i} | {exo_p} |")
 
     lines += [
@@ -10179,7 +10700,7 @@ def tool_guide_taxe_fonciere(args: Dict) -> str:
             if tf_total > plafond_tf:
                 degrevement = tf_total - plafond_tf
                 lines += [
-                    f"### ⚠️ Plafonnement possible (Art. 1391 B ter)",
+                    f"### Plafonnement possible (Art. 1391 B ter)",
                     f"TF {tf_total:,.0f}€ > 50% du RNI {rni:,.0f}€ = {plafond_tf:,.0f}€",
                     f"→ Dégrèvement potentiel : **{degrevement:,.0f}€**",
                     "(À demander auprès du centre des impôts — conditions de ressources à vérifier)",
@@ -10209,7 +10730,7 @@ def tool_guide_taxe_fonciere(args: Dict) -> str:
 
     if logement_neuf:
         lines += [
-            "### ✅ Votre logement neuf",
+            "### Votre logement neuf",
             "- Exonération de taxe foncière pendant **2 ans** à compter de la fin des travaux",
             "- Déposez la **déclaration H1** (résidence principale) ou **H2** (autre) dans les 90 jours",
             "  suivant l'achèvement de la construction auprès du centre des impôts",
@@ -10298,8 +10819,8 @@ def tool_simuler_reversion_pension(args: Dict) -> str:
 
     # Fiscalité
     pension_totale = pension_propre + reversion_servie
-    abatt_retraite_min = 422
-    abatt_retraite_max = 4_321
+    abatt_retraite_min = ABATTEMENT_PENSION_MIN
+    abatt_retraite_max = ABATTEMENT_PENSION_MAX
     abatt = max(abatt_retraite_min, min(abatt_retraite_max, pension_totale * 0.10))
     rni_retraite = max(0, pension_totale - abatt)
     nb_parts_ir = calculer_parts("veuf" if situation_beneficiaire == "veuf" else "celibataire", nb_enfants)
@@ -10326,7 +10847,7 @@ def tool_simuler_reversion_pension(args: Dict) -> str:
 
     if age_beneficiaire < 55 and regime in ["general", "independant"]:
         lines += [
-            f"⚠️ Vous avez {age_beneficiaire} ans — La réversion au régime général nécessite **55 ans minimum**",
+            f"Vous avez {age_beneficiaire} ans — La réversion au régime général nécessite **55 ans minimum**",
             f"   → Vous pourrez en bénéficier dans {55 - age_beneficiaire} an(s)",
             "",
         ]
@@ -10351,7 +10872,7 @@ def tool_simuler_reversion_pension(args: Dict) -> str:
     elif regime == "general":
         lines += [
             f"| Plafond ressources | {plafond:,}€/an |",
-            f"| Vos ressources + réversion | {rfr_prise_en_compte:,.0f}€ ✅ Dans les limites |",
+            f"| Vos ressources + réversion | {rfr_prise_en_compte:,.0f}€ Dans les limites |",
             f"| **Réversion servie** | **{reversion_servie:,.0f}€/an ({reversion_servie/12:,.0f}€/mois)** |",
         ]
     else:
@@ -10423,12 +10944,12 @@ def tool_guide_revision_declaration(args: Dict) -> str:
 
     if annee_fin_reclamation < annee_actuelle:
         lines += [
-            f"⚠️ **Délai de réclamation expiré** : la période de réclamation pour {annee_concernee} s'est terminée le 31/12/{annee_fin_reclamation}",
+            f"**Délai de réclamation expiré** : la période de réclamation pour {annee_concernee} s'est terminée le 31/12/{annee_fin_reclamation}",
             "",
         ]
     elif annee_concernee < annee_actuelle:
         lines += [
-            f"✅ **Réclamation encore possible** jusqu'au 31 décembre {annee_fin_reclamation}",
+            f"**Réclamation encore possible** jusqu'au 31 décembre {annee_fin_reclamation}",
             "",
         ]
 
@@ -10453,7 +10974,7 @@ def tool_guide_revision_declaration(args: Dict) -> str:
             "demarche": [
                 "→ **Correction spontanée** fortement recommandée (réduit les pénalités)",
                 "→ En ligne avant le 15 décembre ou déclaration rectificative papier",
-                "⚠️ Si l'administration détecte l'omission : majoration 10% (bonne foi) à 40% (manquement délibéré)",
+                "Si l'administration détecte l'omission : majoration 10% (bonne foi) à 40% (manquement délibéré)",
                 "Intérêts de retard : 0.20%/mois (soit 2.4%/an)",
                 "Divulgation spontanée : majoration généralement limitée à 10%",
             ]
@@ -10605,7 +11126,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         is_base = max(0, ca_val - charges_pro - cout_salarial)
         is_total = round(min(is_base, 42_500) * 0.15 + max(0, is_base - 42_500) * 0.25)
         dividendes_bruts = max(0, is_base - is_total)
-        net_dividendes = round(dividendes_bruts * 0.70)
+        net_dividendes = round(dividendes_bruts * (1 - PFU_CAPITAL))
         abatt = abattement_frais_pro(net_smic)
         ir_smic = calculer_ir(max(0, net_smic - abatt), nb_parts)["impot_net"]
         net_final = net_smic - round(ir_smic) + net_dividendes
@@ -10635,7 +11156,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         is_base = max(0, benefice - remun_brute - cotis_tns)
         is_total = round(min(is_base, 42_500) * 0.15 + max(0, is_base - 42_500) * 0.25)
         dividendes_bruts = max(0, is_base - is_total)
-        net_dividendes = round(dividendes_bruts * 0.70)
+        net_dividendes = round(dividendes_bruts * (1 - PFU_CAPITAL))
         ir_remun = round(calculer_ir(net_remun, nb_parts)["impot_net"])
         net_final = net_remun - ir_remun + net_dividendes
         return {
@@ -10689,7 +11210,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
                 net = simuler_sasu(ca_t).get("net_final", 0)
             elif statut == "eurl":
                 net = simuler_eurl(ca_t).get("net_final", 0)
-            else:  # portage
+            else: # portage
                 net = simuler_portage(ca_t).get("net_final", 0)
             if net < net_cdi:
                 lo = mid
@@ -10774,7 +11295,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
             f"| Net en poche | {ae_r['net_final']:,} EUR |",
             "",
             "### Détail SASU",
-            "*(Rémunération SMIC + dividendes soumis PFU 30 %)*",
+            f"*(Rémunération SMIC + dividendes soumis PFU {pct_fr(PFU_CAPITAL)})*",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
@@ -10782,12 +11303,12 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
             f"| Coût salarial SMIC (prés. assimilé) | {sasu_r['cout_salarial']:,} EUR |",
             f"| Base IS | {sasu_r['is_base']:,} EUR |",
             f"| IS (15 % / 25 %) | {sasu_r['is_total']:,} EUR |",
-            f"| Dividendes nets (PFU 30 %) | {sasu_r['net_dividendes']:,} EUR |",
+            f"| Dividendes nets (PFU {pct_fr(PFU_CAPITAL)}) | {sasu_r['net_dividendes']:,} EUR |",
             f"| Net salaire SMIC | {sasu_r['net_smic']:,} EUR |",
             f"| Net en poche | {sasu_r['net_final']:,} EUR |",
             "",
             "### Détail EURL à l'IS",
-            "*(Rémunération 65 % du bénéfice + dividendes PFU 30 %)*",
+            f"*(Rémunération 65 % du bénéfice + dividendes PFU {pct_fr(PFU_CAPITAL)})*",
             "",
             "| Poste | Montant |",
             "|-------|---------|",
@@ -10797,7 +11318,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
             f"| Net rémunération | {eurl_r['net_remun']:,} EUR |",
             f"| IR sur rémunération | {eurl_r['ir_remun']:,} EUR |",
             f"| IS (15 % / 25 %) | {eurl_r['is_total']:,} EUR |",
-            f"| Net dividendes (PFU 30 %) | {eurl_r['net_dividendes']:,} EUR |",
+            f"| Net dividendes (PFU {pct_fr(PFU_CAPITAL)}) | {eurl_r['net_dividendes']:,} EUR |",
             f"| Net en poche | {eurl_r['net_final']:,} EUR |",
             "",
             "### Détail Portage salarial",
@@ -10854,7 +11375,7 @@ def tool_comparer_statuts_professionnel(args: Dict) -> str:
         "| Transition / missions courtes | Portage salarial | Sécurité, pas de création de société |",
         "",
         "---",
-        "*Simulation basée sur les taux 2025. Les taux de cotisations sont approximatifs.*",
+        f"*Simulation basée sur les taux {ANNEE_DECLARATION}. Les taux de cotisations sont approximatifs.*",
         "*Consultez un expert-comptable avant toute décision de changement de statut.*",
     ]
     return "\n".join(lines)
@@ -10921,8 +11442,9 @@ def tool_verifier_actualite_fiscale(args: Dict) -> str:
         "",
         "| Paramètre | Valeur MCP | Source |",
         "|-----------|-----------|--------|",
-        f"| Plafond PER max | {PLAFOND_PER_MAX_2025:,} EUR | 10 % x 8 PASS {annee_revenus_mcp - 1} — reindexer |",
-        f"| Plafond PER min | {PLAFOND_PER_MIN_2025:,} EUR | 10 % x 1 PASS {annee_revenus_mcp - 1} — reindexer |",
+        f"| Plafond PER max, versements {annee_actuelle_mcp} | {PLAFOND_PER_MAX:,} EUR | 10 % x 8 PASS {annee_revenus_mcp} |",
+        f"| Plafond PER min, versements {annee_actuelle_mcp} | {PLAFOND_PER_MIN:,} EUR | 10 % x 1 PASS {annee_revenus_mcp} |",
+        f"| Plafonds PER, versements {annee_revenus_mcp} | {PLAFOND_PER_MAX_VERSEMENTS_2025:,} / {PLAFOND_PER_MIN_VERSEMENTS_2025:,} EUR | Base de la déclaration {annee_actuelle_mcp} |",
         "",
         "### Impôt sur les sociétés",
         "",
@@ -10971,6 +11493,45 @@ def tool_verifier_actualite_fiscale(args: Dict) -> str:
         "| Seuil 3 % (célibataire) | 250 000 EUR | Stable |",
         "| Seuil 4 % (célibataire) | 500 000 EUR | Stable |",
         "",
+        "### CDHR (contribution différentielle hauts revenus)",
+        "",
+        "| Paramètre | Valeur MCP | A vérifier |",
+        "|-----------|-----------|------------|",
+        f"| Taux d'imposition minimale | {pct_fr(CDHR_TAUX, 0)} | Art. 224 CGI |",
+        f"| Seuils d'assujettissement | {CDHR_SEUIL_SEUL:,} / {CDHR_SEUIL_COUPLE:,} EUR | Non indexés |",
+        f"| Plafonds de décote | {CDHR_PLAFOND_DECOTE_SEUL:,} / {CDHR_PLAFOND_DECOTE_COUPLE:,} EUR | Non indexés |",
+        f"| Acompte | {pct_fr(CDHR_ACOMPTE_TAUX, 0)} du {CDHR_ACOMPTE_PERIODE} | Reconduit tant que le déficit dépasse 3 % du PIB |",
+        "",
+        "### Prélèvements sociaux sur le capital",
+        "",
+        "| Paramètre | Valeur MCP | A vérifier |",
+        "|-----------|-----------|------------|",
+        f"| CSG capital (droit commun) | {pct_fr(CSG_CAPITAL)} | LFSS 2026, hausse de 1,4 point |",
+        f"| Taux global capital | {pct_fr(PS_CAPITAL)} | Dividendes, intérêts, PV mobilières, crypto, PEA, épargne salariale, PER, LMNP |",
+        f"| Taux maintenu | {pct_fr(PS_IMMOBILIER)} | Revenus fonciers, PV immobilières, "
+        f"assurance-vie ({pct_fr(PS_ASSURANCE_VIE)}), épargne logement et PEP ({pct_fr(PS_EPARGNE_LOGEMENT)}) |",
+        f"| Date de la hausse | {DATE_HAUSSE_CSG_CAPITAL} | Produits de placement ; revenus du patrimoine dès 2025 |",
+        f"| PFU total | {pct_fr(PFU_CAPITAL)} | {pct_fr(PFU_IR)} d'IR + prélèvements sociaux |",
+        f"| CSG déductible | {pct_fr(CSG_DEDUCTIBLE)} | Art. 154 quinquies II CGI |",
+        f"| PS pensions et rentes à titre gratuit | {pct_fr(PS_PENSION)} | Non concerné par la hausse |",
+        "",
+        "### Prélèvement à la source",
+        "",
+        "| Paramètre | Valeur MCP | A vérifier |",
+        "|-----------|-----------|------------|",
+        f"| Grille des taux par défaut | 3 zones, 20 tranches, en vigueur au {PAS_DATE_GRILLE} | BOI-BAREME-000037, actualisée chaque 1er mai |",
+        f"| Abattement contrats courts | {PAS_ABATTEMENT_CONTRAT_COURT:,} EUR/mois | 50 % du SMIC net imposable mensuel |",
+        f"| Nouveau taux annuel | {PAS_DATE_NOUVEAU_TAUX} | Issu de la déclaration des revenus {annee_revenus_mcp} |",
+        "",
+        "### Facturation électronique",
+        "",
+        "| Paramètre | Valeur MCP | A vérifier |",
+        "|-----------|-----------|------------|",
+        f"| Réception obligatoire | {FACTURATION_ELECTRONIQUE['date_reception']} | Toutes les entreprises assujetties |",
+        f"| Émission GE et ETI | {FACTURATION_ELECTRONIQUE['date_emission_ge_eti']} | LF 2024 art. 91 |",
+        f"| Émission PME, TPE, micro | {FACTURATION_ELECTRONIQUE['date_emission_pme_tpe']} | LF 2024 art. 91 |",
+        f"| Amende par facture non conforme | {FACTURATION_ELECTRONIQUE['sanctions']['facture_non_electronique']} EUR | Relevée par la LF 2026 |",
+        "",
     ]
 
     if annee_cible > annee_actuelle_mcp:
@@ -10985,7 +11546,9 @@ def tool_verifier_actualite_fiscale(args: Dict) -> str:
             "4. Recalculer `PLAFOND_PER_MAX` et `PLAFOND_PER_MIN` avec le nouveau PASS.",
             "5. Vérifier les seuils AE et TVA auprès de l'URSSAF.",
             "6. Vérifier le SMIC brut annuel pour les simulations SASU.",
-            "7. Mettre à jour `__version__` et le CHANGELOG.",
+            "7. Vérifier les taux de prélèvements sociaux (`PS_CAPITAL`, `PS_IMMOBILIER`) et la "
+            "grille `TAUX_NEUTRES_PAS` publiée chaque année au BOFiP.",
+            "8. Mettre à jour `__version__` et le CHANGELOG.",
             "",
             "Sources officielles :",
             "- impôts.gouv.fr (barèmes IR, IS, IFI)",
@@ -11027,10 +11590,10 @@ def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
 
     TYPES_INFOS = {
         "indemnite_licenciement": ("Indemnité de licenciement supra-légale", "La fraction légale est exonérée (min 2 PASS). Le surplus est un revenu exceptionnel éligible au quotient."),
-        "prime_exceptionnelle":   ("Prime ou bonus exceptionnel", "N = nombre d'années sur lesquelles le droit a été acquis. Utiliser N=4 par défaut si non justifiable autrement."),
-        "revenus_differés":       ("Revenus différés (rappels de salaires, arriérés)", "N = nombre d'années écoulées entre la naissance du droit et la perception. Éligibilité automatique."),
-        "gain_stock_options":     ("Gain de levée de stock-options / RSU / AGA", "Régime spécifique : taux 30% + PS 10% pour options post-mars 2012. Le quotient ne s'applique pas."),
-        "autre":                  ("Autre revenu exceptionnel ou pluriannuel", "Éligibilité à confirmer selon le caractère non récurrent et pluriannuel du revenu."),
+        "prime_exceptionnelle": ("Prime ou bonus exceptionnel", "N = nombre d'années sur lesquelles le droit a été acquis. Utiliser N=4 par défaut si non justifiable autrement."),
+        "revenus_differés": ("Revenus différés (rappels de salaires, arriérés)", "N = nombre d'années écoulées entre la naissance du droit et la perception. Éligibilité automatique."),
+        "gain_stock_options": ("Gain de levée de stock-options / RSU / AGA", "Régime spécifique : taux 30% + PS 10% pour options post-mars 2012. Le quotient ne s'applique pas."),
+        "autre": ("Autre revenu exceptionnel ou pluriannuel", "Éligibilité à confirmer selon le caractère non récurrent et pluriannuel du revenu."),
     }
     label, info_type = TYPES_INFOS.get(type_revenu, TYPES_INFOS["autre"])
 
@@ -11100,7 +11663,7 @@ def tool_simuler_revenus_exceptionnels(args: Dict) -> str:
 
 
 def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
-    """Compare PFU 30% et barème progressif pour revenus du capital."""
+    """Compare le PFU et le barème progressif pour les revenus du capital."""
     type_revenu = args.get("type_revenu", "dividendes")
     montant = float(args["montant"])
     rni_autres = float(args.get("rni_autres_revenus", 0))
@@ -11108,17 +11671,17 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
     nb_enfants = int(args.get("nb_enfants", 0))
 
     nb_parts = calculer_parts(situation, nb_enfants)
-    PS = 0.172
+    PS = PS_CAPITAL
 
-    # PFU 30%
-    tax_pfu = round(montant * 0.30)
-    ir_pfu = round(montant * 0.128)
+    # PFU
+    tax_pfu = round(montant * PFU_CAPITAL)
+    ir_pfu = round(montant * PFU_IR)
     ps_pfu = round(montant * PS)
 
     # Option bareme
     if type_revenu == "dividendes":
         base_ir_bareme = montant * 0.60  # abattement 40%
-        csg_ded = round(montant * 0.068)  # deductible N+1
+        csg_ded = round(montant * CSG_DEDUCTIBLE)  # deductible N+1
     else:
         base_ir_bareme = montant
         csg_ded = 0
@@ -11131,7 +11694,7 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
 
     tmi = calculer_ir(rni_autres + base_ir_bareme, nb_parts)["taux_marginal"]
     difference = tax_pfu - tax_bareme
-    meilleure = "PFU (flat tax 30%)" if difference < 0 else "Barème progressif"
+    meilleure = f"PFU (flat tax {pct_fr(PFU_CAPITAL)})" if difference < 0 else "Barème progressif"
     economie = abs(difference)
 
     LABELS = {
@@ -11152,8 +11715,8 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
         "",
         "| Option | Base IR | IR | Prél. sociaux | Total | Taux effectif |",
         "|--------|---------|-----|--------------|-------|---------------|",
-        f"| PFU (flat tax) | {montant:,.0f} EUR | {ir_pfu:,} EUR | {ps_pfu:,} EUR | {tax_pfu:,} EUR | 30.0% |",
-        f"| Barème progressif | {base_ir_bareme:,.0f} EUR | {ir_supplementaire:,} EUR | {ps_bareme:,} EUR | {tax_bareme:,} EUR | {tax_bareme/montant*100 if montant > 0 else 0:.1f}% |",
+        f"| PFU (flat tax) | {montant:,.0f} EUR | {ir_pfu:,} EUR | {ps_pfu:,} EUR | {tax_pfu:,} EUR | {pct_fr(PFU_CAPITAL)} |",
+        f"| Barème progressif | {base_ir_bareme:,.0f} EUR | {ir_supplementaire:,} EUR | {ps_bareme:,} EUR | {tax_bareme:,} EUR | {pct_fr(tax_bareme / montant) if montant > 0 else pct_fr(0)} |",
         "",
         f"## Recommandation : **{meilleure}**",
         f"Économie : **{economie:,} EUR** en faveur du {meilleure}",
@@ -11170,21 +11733,34 @@ def tool_comparer_pfu_bareme_capital(args: Dict) -> str:
     lines += [
         "## Seuils de bascule selon le TMI",
         "",
-        "| TMI | Dividendes | Intérêts / PV mobilières |",
-        "|-----|-----------|--------------------------|",
-        "| 0 % | Barème (17.2% seulement) | Barème (17.2% seulement) |",
-        "| 11 % | Barème (~23.8% effectif) | Barème (~28.2% effectif) |",
-        "| 30 % | PFU (30% vs ~35.2%) | PFU (30% vs ~47.2%) |",
-        "| 41 % | PFU (30% vs ~43.8%) | PFU (30% vs ~58.2%) |",
+        f"Taux effectifs comparés au PFU ({pct_fr(PFU_CAPITAL)}), prélèvements sociaux de "
+        f"{pct_fr(PS_CAPITAL)} inclus dans les deux options.",
         "",
-        "- **Dividendes** : barème avantageux si TMI <= 11% (break-even théorique ~21% avec abatt. 40%)",
-        "- **Intérêts / PV** : barème avantageux si TMI <= 11% (break-even à 12.8%)",
+        "| TMI | Dividendes (abatt. 40%) | Intérêts / PV mobilières |",
+        "|-----|------------------------|--------------------------|",
+    ]
+    for tmi_ref in (0, 11, 30, 41, 45):
+        eff_div = tmi_ref * 0.60 / 100 + PS_CAPITAL
+        eff_autres = tmi_ref / 100 + PS_CAPITAL
+        gagnant_div = "Barème" if eff_div <= PFU_CAPITAL else "PFU"
+        gagnant_autres = "Barème" if eff_autres <= PFU_CAPITAL else "PFU"
+        lines.append(
+            f"| {tmi_ref} % | **{gagnant_div}** ({pct_fr(eff_div)} au barème) | "
+            f"**{gagnant_autres}** ({pct_fr(eff_autres)} au barème) |"
+        )
+    lines += [
+        "",
+        f"- **Dividendes** : le barème reste gagnant jusqu'à un TMI de "
+        f"{pct_fr(PFU_IR / 0.60, 0)} environ, grâce à l'abattement de 40% et à la CSG déductible",
+        f"- **Intérêts / plus-values** : break-even au niveau du taux d'IR du PFU, soit {pct_fr(PFU_IR)}",
         "",
         "## Comment opter pour le barème",
         "",
         "- Cochez la case **2OP** dans votre déclaration 2042",
         "- L'option est globale : s'applique à tous vos revenus de capitaux mobiliers de l'année",
-        "- Elle est irrévocable pour l'année concernée",
+        f"- Pour les revenus {ANNEE_REVENUS}, l'option reste **irrévocable** au titre de l'année",
+        "- Pour les revenus 2026 et suivants, la LF 2026 la rend **révocable** : le contribuable "
+        "peut y renoncer a posteriori dans le délai de réclamation (ou lors d'un contrôle)",
         "- A refaire chaque année si pertinent",
         "",
         "---",
@@ -11208,7 +11784,7 @@ def tool_simuler_lmnp(args: Dict) -> str:
     rni_autres = float(args.get("rni_autres_revenus", 0))
 
     nb_parts = calculer_parts(situation, nb_enfants)
-    PS = 0.172
+    PS = PS_CAPITAL  # location meublée non professionnelle : 18,6% depuis les revenus 2025
 
     REGIMES_MICRO_BIC = {
         "classique": (0.50, SEUIL_MICRO_SERVICES, "Location meublée longue durée (abatt. 50%)"),
@@ -11267,7 +11843,7 @@ def tool_simuler_lmnp(args: Dict) -> str:
         "",
         "## Comparatif Micro-BIC vs Réel",
         "",
-        "| Régime | Base imposable | IR | PS (17.2%) | Total taxes | Net encaisse |",
+        f"| Régime | Base imposable | IR | PS ({pct_fr(PS_CAPITAL)}) | Total taxes | Net encaisse |",
         "|--------|---------------|-----|-----------|-------------|--------------|",
     ]
 
@@ -11508,7 +12084,7 @@ def tool_calculer_exit_tax(args: Dict) -> str:
 
     nb_parts = calculer_parts(situation, nb_enfants)
     SEUIL = 800_000
-    PS = 0.172
+    PS = PS_CAPITAL
 
     applicable = pv_latentes >= SEUIL and annees_res >= 6
 
@@ -11543,7 +12119,7 @@ def tool_calculer_exit_tax(args: Dict) -> str:
         ir_sans = calculer_ir(rni_autres, nb_parts)["impot_net"]
         ir_exit = round(ir_avec - ir_sans)
     else:
-        ir_exit = round(pv_latentes * 0.128)
+        ir_exit = round(pv_latentes * PFU_IR)
     ps_exit = round(pv_latentes * PS)
     exit_tax = ir_exit + ps_exit
 
@@ -11554,9 +12130,9 @@ def tool_calculer_exit_tax(args: Dict) -> str:
         "",
         f"| Composante | Taux | Montant |",
         f"|-----------|------|---------|",
-        f"| IR ({'barème progressif' if option_bareme else 'PFU 12.8%'}) | {'variable' if option_bareme else '12.8%'} | {ir_exit:,} EUR |",
-        f"| Prélèvement sociaux | 17.2% | {ps_exit:,} EUR |",
-        f"| **Exit tax totale** | {exit_tax/pv_latentes*100:.1f}% | **{exit_tax:,} EUR** |",
+        f"| IR ({'barème progressif' if option_bareme else f'PFU {pct_fr(PFU_IR)}'}) | {'variable' if option_bareme else pct_fr(PFU_IR)} | {ir_exit:,} EUR |",
+        f"| Prélèvements sociaux | {pct_fr(PS_CAPITAL)} | {ps_exit:,} EUR |",
+        f"| **Exit tax totale** | {pct_fr(exit_tax / pv_latentes) if pv_latentes else pct_fr(0)} | **{exit_tax:,} EUR** |",
         "",
         "## Régime de paiement",
         "",
@@ -11627,15 +12203,15 @@ def tool_guide_loc_avantages(args: Dict) -> str:
 
     NIVEAUX = {
         "intermediaire": {"label": "Intermediaire", "taux": 0.15, "minoration": 0.15, "desc": "Loyer <= marché - 15%"},
-        "social":        {"label": "Social",        "taux": 0.35, "minoration": 0.30, "desc": "Loyer <= marché - 30%"},
-        "tres_social":   {"label": "Très social",   "taux": 0.65, "minoration": 0.45, "desc": "Loyer <= marché - 45%"},
-        "solidaire":     {"label": "Solidaire (via association agréée)", "taux": 0.65, "minoration": 0.45, "desc": "Sous-location solidaire"},
+        "social": {"label": "Social",        "taux": 0.35, "minoration": 0.30, "desc": "Loyer <= marché - 30%"},
+        "tres_social": {"label": "Très social",   "taux": 0.65, "minoration": 0.45, "desc": "Loyer <= marché - 45%"},
+        "solidaire": {"label": "Solidaire (via association agréée)", "taux": 0.65, "minoration": 0.45, "desc": "Sous-location solidaire"},
     }
     ZONES = {
         "A_bis": ("Zone A bis — Paris et 76 communes", 18.0),
-        "A":     ("Zone A — IDF hors A bis, Côte d'Azur, Genevois", 13.5),
-        "B1":    ("Zone B1 — agglomérations > 250 000 hab.", 11.0),
-        "B2_C":  ("Zone B2 / C — autres communes", 8.5),
+        "A": ("Zone A — IDF hors A bis, Côte d'Azur, Genevois", 13.5),
+        "B1": ("Zone B1 — agglomérations > 250 000 hab.", 11.0),
+        "B2_C": ("Zone B2 / C — autres communes", 8.5),
     }
 
     niv = NIVEAUX.get(niveau, NIVEAUX["intermediaire"])
@@ -11755,7 +12331,7 @@ def tool_simuler_micro_foncier(args: Dict) -> str:
     rni_autres = float(args.get("rni_autres_revenus", 0))
 
     nb_parts = calculer_parts(situation, nb_enfants)
-    PS = 0.172
+    PS = PS_IMMOBILIER
     SEUIL_MICRO = 15_000
     ABATT_MICRO = 0.30
     PLAFOND_DEFICIT = DEFICIT_FONCIER_PLAFOND
@@ -11836,7 +12412,7 @@ def tool_simuler_micro_foncier(args: Dict) -> str:
     lines += [
         "## Comparatif",
         "",
-        "| Régime | Base imposable | IR | PS (17.2%) | Total taxes | Net annuel |",
+        f"| Régime | Base imposable | IR | PS ({pct_fr(PS_IMMOBILIER)}) | Total taxes | Net annuel |",
         "|--------|---------------|-----|-----------|-------------|------------|",
     ]
     if eligible_micro:
@@ -12160,7 +12736,7 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
         pts = 1; detail = "Risque moyen, sans charge familiale lourde — acceptable"
     elif acceptation_risque == "moyen" and charge_familiale:
         pts = 0; detail = "Risque moyen avec charge familiale — renforcer l'épargne avant"
-    else:  # faible
+    else: # faible
         pts = 0; detail = "Faible tolérance au risque — portage salarial ou transition progressive conseillée"
     score += pts
     details_score.append(("Profil risque / situation", pts, 1, detail))
@@ -12293,8 +12869,20 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
         "3. Statut : immatriculer SASU ou AE avant la démission (délai d'immatriculation : 1-5 jours)",
         "4. Couverture : souscrire une RC Pro et mutuelle indépendant avant le départ",
         "5. Transition : négocier une rupture conventionnelle pour conserver les droits au chômage (ARE)",
-        "   (ARE en indépendant : possible si CA < seuil ou en portage, à vérifier Pôle Emploi)",
+        "   (ARE en indépendant : possible si CA < seuil ou en portage, à vérifier auprès de France Travail)",
         "6. Expert-comptable : prévoir 1 500 à 2 500 EUR/an (SASU/EURL) ou 500 EUR (AE)",
+        f"7. Facturation électronique : obligation de réception dès le "
+        f"{FACTURATION_ELECTRONIQUE['date_reception']}, émission au "
+        f"{FACTURATION_ELECTRONIQUE['date_emission_pme_tpe']}. Choisir un outil raccordé à une "
+        "plateforme agréée dès la création (outil `guide_facturation_electronique`)",
+        "",
+        f"## Rupture conventionnelle : le filet ARE s'est réduit au {ARE_RUPTURE_CONVENTIONNELLE['date_effet']}",
+        "",
+        f"- Moins de 55 ans : {ARE_RUPTURE_CONVENTIONNELLE['duree_moins_55_mois']:.0f} mois "
+        f"d'indemnisation maximum au lieu de {ARE_RUPTURE_CONVENTIONNELLE['duree_anterieure_moins_55_mois']:.0f}",
+        f"- 55 ans et plus : {ARE_RUPTURE_CONVENTIONNELLE['duree_55_et_plus_mois']:.1f} mois au lieu de "
+        f"{ARE_RUPTURE_CONVENTIONNELLE['duree_anterieure_55_et_plus_mois']:.1f}",
+        "- Trois mois de matelas en moins : l'épargne de précaution devient d'autant plus décisive",
         "",
         "## Alternatives au saut direct",
         "",
@@ -12304,6 +12892,260 @@ def tool_diagnostiquer_passage_freelance(args: Dict) -> str:
         "",
         "---",
         f"*Simulation basée sur les taux {ANNEE_FISCALE}. Consultez un expert-comptable avant toute décision.*",
+    ]
+    return "\n".join(lines)
+
+
+# ─── Outils 3.0.0 ────────────────────────────────────────────────────────────
+
+def tool_calculer_cdhr(args: Dict) -> str:
+    rfr = _valider_revenu(float(args["rfr_retraite"]), "rfr_retraite")
+    situation = args.get("situation_famille", "celibataire")
+    nb_charge = int(args.get("nb_personnes_charge", 0))
+    ir_paye = float(args.get("impot_revenu_paye", 0))
+    cehr_payee = float(args.get("cehr_payee", 0))
+
+    if cehr_payee <= 0:
+        cehr_payee = calculer_cehr(rfr, situation)
+        cehr_estimee = True
+    else:
+        cehr_estimee = False
+
+    res = calculer_cdhr(rfr, situation, ir_paye + cehr_payee, nb_charge)
+    couple = situation in ("marie", "pacse")
+    plafond_decote = CDHR_PLAFOND_DECOTE_COUPLE if couple else CDHR_PLAFOND_DECOTE_SEUL
+
+    lines = [
+        f"# CDHR — Contribution différentielle sur les hauts revenus",
+        "",
+        f"**Revenu fiscal de référence retraité** : {rfr:,.0f}€",
+        f"**Situation** : {'imposition commune' if couple else 'personne seule'}"
+        + (f", {nb_charge} personne(s) à charge" if nb_charge else ""),
+        f"**Seuil d'assujettissement** : {res['seuil']:,}€",
+        "",
+    ]
+
+    if not res["assujetti"]:
+        lines += [
+            "## Résultat : non assujetti",
+            "",
+            f"Le RFR retraité est inférieur au seuil de {res['seuil']:,}€. Aucune CDHR n'est due.",
+            "",
+            "> La CDHR ne concerne que les contribuables domiciliés fiscalement en France.",
+            "",
+            "---",
+            "*Source : art. 224 CGI, créé par la LF 2025 (art. 10) et pérennisé par la LF 2026*",
+        ]
+        return "\n".join(lines)
+
+    lines += [
+        "## Calcul",
+        "",
+        "| Étape | Montant |",
+        "|-------|---------|",
+        f"| Imposition minimale théorique ({pct_fr(CDHR_TAUX, 0)} du RFR) | {rfr * CDHR_TAUX:,.0f}€ |",
+    ]
+    if res["decote_appliquee"]:
+        lines.append(
+            f"| Décote d'entrée : {pct_fr(CDHR_COEF_DECOTE)} × (RFR - {res['seuil']:,}€) | "
+            f"{CDHR_COEF_DECOTE * (rfr - res['seuil']):,.0f}€ |"
+        )
+    lines += [
+        f"| **Imposition minimale retenue** | **{res['impot_cible']:,.0f}€** |",
+        f"| Impôt sur le revenu déjà acquitté | -{ir_paye:,.0f}€ |",
+        f"| CEHR{' (estimée)' if cehr_estimee else ''} | -{cehr_payee:,.0f}€ |",
+    ]
+    if res["majorations"] > 0:
+        lines.append(f"| Majorations forfaitaires | -{res['majorations']:,.0f}€ |")
+    lines += [
+        f"| **CDHR due** | **{res['montant']:,.0f}€** |",
+        "",
+    ]
+
+    if res["montant"] > 0:
+        lines += [
+            f"## Résultat : {res['montant']:,.0f}€ de contribution",
+            "",
+            f"- Taux d'imposition minimal effectivement appliqué : {pct_fr(res['taux_effectif_min'])} du RFR",
+            f"- Acompte de {pct_fr(CDHR_ACOMPTE_TAUX, 0)} à verser du {CDHR_ACOMPTE_PERIODE}, "
+            f"soit **{res['acompte']:,.0f}€**",
+            "- Solde régularisé lors de la liquidation de l'impôt sur le revenu",
+            "",
+        ]
+    else:
+        lines += [
+            "## Résultat : aucune contribution due",
+            "",
+            "Votre imposition atteint déjà le minimum de 20% du RFR retraité.",
+            "",
+        ]
+
+    lines += [
+        "## Mécanisme",
+        "",
+        f"- Seuils : {CDHR_SEUIL_SEUL:,}€ (personne seule) et {CDHR_SEUIL_COUPLE:,}€ (imposition commune)",
+        f"- La décote lisse l'entrée dans le dispositif jusqu'à {plafond_decote:,}€ : "
+        f"la contribution est quasi nulle au seuil et atteint son plein effet au-delà",
+        f"- Majorations forfaitaires : {CDHR_MAJORATION_COUPLE:,}€ pour un couple et "
+        f"{CDHR_MAJORATION_PERSONNE_CHARGE:,}€ par personne à charge",
+        "- Les prélèvements sociaux ne sont pas pris en compte : seuls comptent l'IR, "
+        "le PFU, les prélèvements libératoires et la CEHR",
+        "",
+        "## Retraitements du RFR",
+        "",
+        "Le RFR est corrigé avant application du taux de 20% :",
+        "- neutralisation des abattements sur plus-values de cession de titres "
+        "(abattement fixe dirigeant, abattement renforcé PME)",
+        "- retrait des revenus exonérés par convention internationale",
+        "- revenus exceptionnels retenus pour un quart lorsqu'ils excèdent la moyenne des "
+        "revenus des trois années précédentes",
+        "- réintégration de certains avantages fiscaux, notamment les réductions au titre des "
+        "dons et de l'outre-mer",
+        "",
+        "## Leviers",
+        "",
+        "- Étaler les cessions de titres et les distributions de dividendes sur plusieurs années",
+        "- Arbitrer entre PFU et barème : à ce niveau de revenus, l'IR au barème augmente les "
+        "impôts pris en compte et réduit d'autant la CDHR",
+        "- Anticiper l'acompte de décembre pour éviter la majoration de retard",
+        "",
+        "---",
+        "*Source : art. 224 CGI, créé par la LF 2025 (art. 10) et pérennisé par la LF 2026*",
+        "*Estimation indicative : les retraitements du RFR nécessitent l'avis d'un conseil.*",
+    ]
+    return "\n".join(lines)
+
+
+def tool_guide_facturation_electronique(args: Dict) -> str:
+    taille = args.get("taille_entreprise", "micro_entreprise")
+    assujetti = bool(args.get("assujetti_tva", True))
+    clients = args.get("clients", "b2b_france")
+
+    fe = FACTURATION_ELECTRONIQUE
+    profil = fe["tailles"].get(taille, fe["tailles"]["micro_entreprise"])
+    sanctions = fe["sanctions"]
+
+    lines = [
+        "# Facturation électronique — obligation au 1er septembre 2026",
+        "",
+        f"**Votre profil** : {profil['label']} ({profil['seuils']})",
+        f"**Assujetti à la TVA** : {'oui' if assujetti else 'non'}",
+        f"**Clientèle** : {clients.replace('_', ' ')}",
+        "",
+        "## Vos deux échéances",
+        "",
+        "| Obligation | Date | Concerne |",
+        "|------------|------|----------|",
+        f"| Recevoir des factures électroniques | **{fe['date_reception']}** | toutes les entreprises assujetties à la TVA |",
+        f"| Émettre des factures électroniques | **{profil['emission']}** | {profil['label']} |",
+        "",
+    ]
+
+    if profil["emission"] == fe["date_emission_ge_eti"]:
+        lines += [
+            "> Vous relevez de la première vague : réception **et** émission dès le "
+            f"{fe['date_emission_ge_eti']}. L'ensemble de vos factures B2B domestiques doit "
+            "transiter par une plateforme agréée.",
+            "",
+        ]
+    else:
+        lines += [
+            f"> Vous devez être en mesure de **recevoir** dès le {fe['date_reception']}, même si "
+            f"votre obligation d'**émission** n'intervient que le {fe['date_emission_pme_tpe']}. "
+            "En pratique, vos fournisseurs grands comptes vous enverront des factures "
+            "électroniques dès septembre 2026 : sans plateforme, vous ne les recevrez pas.",
+            "",
+        ]
+
+    if not assujetti:
+        lines += [
+            "**Cas particulier** : une activité hors du champ de la TVA (certaines professions "
+            "médicales, activités exonérées) n'entre pas dans le périmètre. La franchise en base "
+            "de TVA, elle, **ne dispense pas** de l'obligation : un auto-entrepreneur en franchise "
+            "reste un assujetti.",
+            "",
+        ]
+    elif taille in ("micro_entreprise", "tpe"):
+        lines += [
+            "**Franchise en base de TVA** : elle ne change rien. Le micro-entrepreneur en "
+            "franchise n'est pas redevable de la TVA mais reste assujetti, donc soumis à "
+            "l'obligation. La mention « TVA non applicable, art. 293 B du CGI » demeure.",
+            "",
+        ]
+
+    lines += [
+        "## Ce qui est concerné, et ce qui ne l'est pas",
+        "",
+        "| Type d'opération | Facture électronique | e-reporting |",
+        "|------------------|---------------------|-------------|",
+        "| B2B en France (entre assujettis établis en France) | obligatoire | non |",
+        "| B2C (particuliers) | non | obligatoire |",
+        "| Client ou fournisseur étranger | non | obligatoire |",
+        "",
+        "L'e-reporting est la transmission périodique des données de transaction à "
+        "l'administration, au même calendrier que l'obligation d'émission.",
+        "",
+    ]
+
+    if clients == "b2c":
+        lines += [
+            "> Votre clientèle est B2C : vous n'aurez pas de facture électronique à émettre, "
+            "mais vous devrez transmettre les données de vos encaissements (e-reporting) "
+            f"à compter du {profil['emission']}.",
+            "",
+        ]
+    elif clients == "etranger":
+        lines += [
+            "> Vos opérations internationales sortent du champ de la facturation électronique "
+            "obligatoire, mais relèvent de l'e-reporting. Une facture papier ou PDF simple reste "
+            "possible pour un client établi hors de France.",
+            "",
+        ]
+
+    lines += [
+        "## Comment se mettre en conformité",
+        "",
+        "1. **Choisir une plateforme agréée (PA)** immatriculée par la DGFiP. Le portail public "
+        "de facturation ne joue plus le rôle de plateforme gratuite : il ne conserve que "
+        "l'annuaire des destinataires et le concentrateur de données. La liste des plateformes "
+        "immatriculées est publiée sur impots.gouv.fr.",
+        "2. **Vérifier son immatriculation à l'annuaire** : c'est lui qui permet à vos clients "
+        "de vous adresser leurs factures.",
+        f"3. **Adopter un format structuré** : {', '.join(fe['formats'])}. Un PDF classique "
+        "envoyé par courriel ne constitue plus une facture électronique au sens de la réforme.",
+        "4. **Compléter ses mentions obligatoires** :",
+    ]
+    for mention in fe["mentions_nouvelles"]:
+        lines.append(f"   - {mention}")
+    lines += [
+        "5. **Adapter son outil de facturation** : la plupart des logiciels de gestion et des "
+        "solutions de comptabilité intègrent une plateforme agréée ou s'y connectent.",
+        "",
+        "## Sanctions (montants relevés par la LF 2026)",
+        "",
+        "| Manquement | Amende | Plafond annuel |",
+        "|------------|--------|----------------|",
+        f"| Facture non émise sous forme électronique | {sanctions['facture_non_electronique']}€ par facture | {sanctions['facture_plafond_annuel']:,}€ |",
+        f"| Données d'e-reporting non transmises | {sanctions['ereporting_transmission']}€ par transmission | {sanctions['ereporting_plafond_annuel']:,}€ |",
+        f"| Absence de plateforme agréée après mise en demeure | {sanctions['absence_plateforme']}€ | +{sanctions['absence_plateforme_persistance']:,}€ si le manquement persiste 3 mois |",
+        "",
+        "La première infraction est en principe non sanctionnée en cas de régularisation "
+        "spontanée ou dans les 30 jours.",
+        "",
+        "## Effets de bord utiles",
+        "",
+        "- **Délais de paiement** : la date de réception de la facture devient certaine, ce qui "
+        "sécurise le point de départ des délais de règlement et les pénalités de retard.",
+        "- **TVA** : les données transmises alimentent le pré-remplissage des déclarations de TVA.",
+        "- **Contrôle fiscal** : l'administration disposant des flux en quasi temps réel, "
+        "l'écart entre chiffre d'affaires déclaré et facturé devient immédiatement visible.",
+        "- **Freelances** : prévoyez le sujet dans votre choix d'outil de facturation dès la "
+        "création, le coût d'une plateforme agréée étant souvent inclus dans les offres de "
+        "facturation ou de comptabilité en ligne.",
+        "",
+        "---",
+        "*Sources : art. 289 bis et 290 CGI, calendrier fixé par la LF 2024 (art. 91), sanctions relevées par la LF 2026*",
+        "*Liste officielle des plateformes agréées : impots.gouv.fr*",
     ]
     return "\n".join(lines)
 
